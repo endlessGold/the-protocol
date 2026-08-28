@@ -202,23 +202,27 @@ impl ProtocolCore {
 
         let mut npcs = VarArray::new();
         for npc in &room.npcs {
-            npcs.push(&dict! {
+            // Bound to a typed local first: `dict!` is generic over
+            // Dictionary<K, V> and `.to_variant()` accepts any of them, so
+            // inline `dict!{..}.to_variant()` leaves K/V unconstrained
+            // (E0283). Same below and in get_inventory.
+            let entry: VarDictionary = dict! {
                 "id" => npc.id as i64,
                 "name" => npc.name.clone(),
                 "hp" => npc.hp as i64,
                 "max_hp" => npc.max_hp as i64,
-            }
-            .to_variant());
+            };
+            npcs.push(&entry.to_variant());
         }
 
         let mut players = VarArray::new();
         for player in &room.players {
-            players.push(&dict! {
+            let entry: VarDictionary = dict! {
                 "id" => player.id as i64,
                 "name" => player.name.clone(),
                 "level" => player.level as i64,
-            }
-            .to_variant());
+            };
+            players.push(&entry.to_variant());
         }
 
         dict! {
@@ -246,12 +250,12 @@ impl ProtocolCore {
 
         let mut items = VarArray::new();
         for item in &inventory.items {
-            items.push(&dict! {
+            let entry: VarDictionary = dict! {
                 "item_id" => item.item_id as i64,
                 "name" => item.name.clone(),
                 "quantity" => item.quantity as i64,
-            }
-            .to_variant());
+            };
+            items.push(&entry.to_variant());
         }
 
         dict! {
