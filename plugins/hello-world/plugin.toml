@@ -1,0 +1,14 @@
+name = "hello-world"
+version = "0.1.0"
+description = "Minimal test plugin for The Protocol plugin engine"
+api_version = "0.1.0"
+
+[permissions]
+required = ["log"]
+optional = ["storage"]
+
+[resources]
+memory_limit = 16777216
+fuel_limit = 100000000
+
+[dependencies]

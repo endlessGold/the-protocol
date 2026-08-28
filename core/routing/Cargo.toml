@@ -1,0 +1,14 @@
+[package]
+name = "protocol-routing"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+dashmap.workspace = true
+
+protocol-protocol = { path = "../protocol" }
+protocol-session = { path = "../session" }

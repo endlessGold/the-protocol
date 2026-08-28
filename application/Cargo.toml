@@ -1,0 +1,14 @@
+[package]
+name = "protocol-application"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+
+protocol-domain = { path = "../domain" }

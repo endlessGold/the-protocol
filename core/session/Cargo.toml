@@ -1,0 +1,15 @@
+[package]
+name = "protocol-session"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio.workspace = true
+dashmap.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+serde.workspace = true
+
+protocol-protocol = { path = "../protocol" }

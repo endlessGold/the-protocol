@@ -1,0 +1,13 @@
+/target
+**/target
+Cargo.lock.bak
+
+# entity-naming lives in its own separate git repo
+/entity-naming
+
+# editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

@@ -1,0 +1,15 @@
+[package]
+name = "protocol-protocol"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rmp-serde.workspace = true
+thiserror.workspace = true
+crc32fast.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
+chrono.workspace = true
+rand.workspace = true
