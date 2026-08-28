@@ -19,7 +19,18 @@ crate-type = ["cdylib"]
 # this fails to resolve or the API doesn't match, run `cargo add godot` and
 # pin whatever it resolves to, then re-check this crate against the current
 # book, since the macro surface below may have shifted.
-godot = "0.5.5"
+#
+# `api-4-4` pins which Godot API level this is built against. WITHOUT it,
+# gdext 0.5.5 targets its newest supported API (4.6), and Godot refuses to
+# load the result on anything older - observed in CI as:
+#   "godot-rust compiled against newer Godot version: v4.6.stable.official"
+#   "GDExtension initialization function 'gdext_rust_init' returned an error"
+# gdext is forward-compatible but not backward: built against 4.4 loads on
+# 4.4 and newer, so pinning the floor here rather than taking the default
+# widens the range of Godot versions this works with. Raise it (and
+# compatibility_minimum in godot-client/bin/core.gdextension, plus the
+# Godot version in CI) together, deliberately, if a newer API is needed.
+godot = { version = "0.5.5", features = ["api-4-4"] }
 
 protocol-application = { path = "../../application" }
 protocol-domain = { path = "../../domain" }
