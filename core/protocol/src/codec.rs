@@ -152,7 +152,7 @@ mod tests {
 
         let encoded = codec.encode(&original).unwrap();
         let mut buf = encoded;
-        let decoded = codec.decode_simple(&mut buf).unwrap().unwrap();
+        let decoded = ProtocolCodec::decode_simple(&mut buf).unwrap().unwrap();
 
         assert_eq!(decoded.version, original.version);
         assert_eq!(decoded.id, original.id);
