@@ -1,0 +1,26 @@
+[package]
+name = "protocol-godot"
+version = "0.1.0"
+edition = "2021"
+
+# cdylib is what Godot's GDExtension loader dlopen()s. Confirmed verbatim
+# and identically in two independently-fetched godot-rust book sources
+# (intro/hello-world and the raw classes.md) - this line is the
+# highest-confidence item in the API research behind this crate.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The crate name `godot` on crates.io is confirmed by all four sources
+# consulted (book, repo README, docs.rs). The VERSION is the least certain
+# part: no source shows a rendered `godot = "x.y.z"` line (the book only
+# shows `cargo add godot`), so 0.5.5 comes from docs.rs's crate page
+# (released 2026-08-09) alone. gdext ships point releases frequently - if
+# this fails to resolve or the API doesn't match, run `cargo add godot` and
+# pin whatever it resolves to, then re-check this crate against the current
+# book, since the macro surface below may have shifted.
+godot = "0.5.5"
+
+protocol-application = { path = "../../application" }
+protocol-domain = { path = "../../domain" }
+protocol-presentation = { path = "../../core/presentation" }

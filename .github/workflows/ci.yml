@@ -42,6 +42,29 @@ jobs:
       - name: cargo test --workspace
         run: cargo test --workspace --verbose
 
+  godot-bindings:
+    name: cargo build (bindings/godot, advisory)
+    runs-on: ubuntu-latest
+    # Advisory: bindings/godot depends on the external gdext crate, whose
+    # exact version and macro API were researched from docs but never
+    # compiled (see bindings/godot/src/lib.rs header). It's excluded from
+    # the workspace so a wrong version can't break the core's CI - this job
+    # exists purely to surface the real compiler output so it can be fixed.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "bindings/godot -> target"
+
+      - name: cargo build --manifest-path bindings/godot/Cargo.toml
+        run: cargo build --manifest-path bindings/godot/Cargo.toml --verbose
+
   fmt-and-clippy:
     name: cargo fmt --check & clippy
     runs-on: ubuntu-latest

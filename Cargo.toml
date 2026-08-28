@@ -17,6 +17,18 @@ members = [
     "tools/wat2wasm",
 ]
 
+# bindings/godot is deliberately NOT a workspace member. It depends on the
+# external `godot` (gdext) crate, whose exact version/API could not be
+# verified by compiling anything (see that crate's lib.rs header). Keeping
+# it out of the default `--workspace` build means a wrong gdext version
+# can't break CI for the entire core; it gets its own advisory CI job
+# instead (see .github/workflows/ci.yml). Build it explicitly with
+# `cargo build --manifest-path bindings/godot/Cargo.toml`. Promote it to
+# `members` once it's confirmed to build.
+exclude = [
+    "bindings/godot",
+]
+
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
