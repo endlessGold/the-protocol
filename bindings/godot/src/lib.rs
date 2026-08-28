@@ -90,12 +90,12 @@ impl ProtocolCore {
     /// emission: the no-argument form is corroborated identically by two
     /// book sources; the with-arguments form comes from one.
     #[signal]
-    fn presentation_command(command_type: GString, data: Dictionary);
+    fn presentation_command(command_type: GString, data: VarDictionary);
 
     /// Create the character this client controls, and bind it.
     /// Returns `{success: bool, character_id: int, error: String}`.
     #[func]
-    fn create_character(&mut self, name: GString, class: GString) -> Dictionary {
+    fn create_character(&mut self, name: GString, class: GString) -> VarDictionary {
         let result = {
             let mut world = self.world.borrow_mut();
             world.create_character(name.to_string(), &class.to_string())
@@ -124,7 +124,7 @@ impl ProtocolCore {
     /// north/south/east/west/up/down (also accepts n/s/e/w/u/d, per
     /// `Direction::from_str`).
     #[func]
-    fn move_player(&mut self, direction: GString) -> Dictionary {
+    fn move_player(&mut self, direction: GString) -> VarDictionary {
         let Some(character_id) = self.character_id else {
             return err_dict(NO_CHARACTER);
         };
@@ -153,7 +153,7 @@ impl ProtocolCore {
 
     /// Attack an NPC in the current room by (partial) name.
     #[func]
-    fn attack(&mut self, target_name: GString) -> Dictionary {
+    fn attack(&mut self, target_name: GString) -> VarDictionary {
         let Some(character_id) = self.character_id else {
             return err_dict(NO_CHARACTER);
         };
@@ -182,7 +182,7 @@ impl ProtocolCore {
 
     /// Describe the room the bound character is in.
     #[func]
-    fn look(&mut self) -> Dictionary {
+    fn look(&mut self) -> VarDictionary {
         let Some(character_id) = self.character_id else {
             return err_dict(NO_CHARACTER);
         };
@@ -195,12 +195,12 @@ impl ProtocolCore {
             return err_dict("Room not found");
         };
 
-        let mut exits = VariantArray::new();
+        let mut exits = VarArray::new();
         for exit in &room.exits {
             exits.push(&exit.to_variant());
         }
 
-        let mut npcs = VariantArray::new();
+        let mut npcs = VarArray::new();
         for npc in &room.npcs {
             npcs.push(&dict! {
                 "id" => npc.id as i64,
@@ -211,7 +211,7 @@ impl ProtocolCore {
             .to_variant());
         }
 
-        let mut players = VariantArray::new();
+        let mut players = VarArray::new();
         for player in &room.players {
             players.push(&dict! {
                 "id" => player.id as i64,
@@ -225,16 +225,16 @@ impl ProtocolCore {
             "success" => true,
             "room_name" => room.name,
             "room_description" => room.description,
-            "exits" => exits,
-            "npcs" => npcs,
-            "players" => players,
+            "exits" => &exits,
+            "npcs" => &npcs,
+            "players" => &players,
             "error" => "",
         }
     }
 
     /// Inventory contents of the bound character.
     #[func]
-    fn get_inventory(&mut self) -> Dictionary {
+    fn get_inventory(&mut self) -> VarDictionary {
         let Some(character_id) = self.character_id else {
             return err_dict(NO_CHARACTER);
         };
@@ -244,7 +244,7 @@ impl ProtocolCore {
             return err_dict("Character not found");
         };
 
-        let mut items = VariantArray::new();
+        let mut items = VarArray::new();
         for item in &inventory.items {
             items.push(&dict! {
                 "item_id" => item.item_id as i64,
@@ -256,7 +256,7 @@ impl ProtocolCore {
 
         dict! {
             "success" => true,
-            "items" => items,
+            "items" => &items,
             "gold" => inventory.gold as i64,
             "error" => "",
         }
@@ -297,7 +297,7 @@ impl ProtocolCore {
 
 const NO_CHARACTER: &str = "No character yet - call create_character first";
 
-fn err_dict(message: &str) -> Dictionary {
+fn err_dict(message: &str) -> VarDictionary {
     dict! {
         "success" => false,
         "error" => message.to_string(),
@@ -316,7 +316,7 @@ fn property_to_variant(value: &PropertyValue) -> Variant {
 /// Flatten a `PresentationCommand` into the `(type, data)` pair that
 /// `PresentationBridge.apply()` on the GDScript side expects. Keys here
 /// must stay in sync with `godot-client/autoload/presentation_bridge.gd`.
-fn command_to_dict(command: &PresentationCommand) -> (&'static str, Dictionary) {
+fn command_to_dict(command: &PresentationCommand) -> (&'static str, VarDictionary) {
     match command {
         PresentationCommand::SpawnEntity {
             entity_id,
@@ -359,7 +359,7 @@ fn command_to_dict(command: &PresentationCommand) -> (&'static str, Dictionary) 
             dict! {
                 "entity_id" => *entity_id as i64,
                 "key" => key.clone(),
-                "value" => property_to_variant(value),
+                "value" => &property_to_variant(value),
             },
         ),
         PresentationCommand::PlayEffect {
@@ -367,9 +367,9 @@ fn command_to_dict(command: &PresentationCommand) -> (&'static str, Dictionary) 
             entity_id,
             params,
         } => {
-            let mut param_dict = Dictionary::new();
+            let mut param_dict = VarDictionary::new();
             for (k, v) in params {
-                param_dict.set(k.clone(), property_to_variant(v));
+                param_dict.set(k.clone(), &property_to_variant(v));
             }
             (
                 "PlayEffect",
@@ -378,7 +378,7 @@ fn command_to_dict(command: &PresentationCommand) -> (&'static str, Dictionary) 
                     // Godot has no null-int; -1 means "no entity", matching
                     // current_character_id()'s convention above.
                     "entity_id" => entity_id.map(|id| id as i64).unwrap_or(-1),
-                    "params" => param_dict,
+                    "params" => &param_dict,
                 },
             )
         }
