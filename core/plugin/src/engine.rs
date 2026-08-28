@@ -106,6 +106,20 @@ impl PluginEngine {
             return Ok(());
         }
 
+        let manifests = self.discover()?;
+        let manifest = manifests
+            .into_iter()
+            .find(|m| m.name == name)
+            .ok_or_else(|| PluginError::NotFound(name.to_string()))?;
+
+        // Reject an incompatible plugin before spending time compiling its
+        // WASM module. See `manifest::validate_api_version` for why this
+        // wasn't happening before.
+        crate::manifest::validate_api_version(
+            &manifest.api_version,
+            crate::manifest::RUNTIME_API_VERSION,
+        )?;
+
         let wasm_path = self.plugin_dir.join(name).join("plugin.wasm");
         if !wasm_path.exists() {
             return Err(PluginError::NotFound(format!(
@@ -118,12 +132,6 @@ impl PluginEngine {
 
         let module = Module::new(&self.engine, &wasm_bytes)
             .map_err(|e| PluginError::Compilation(e.to_string()))?;
-
-        let manifests = self.discover()?;
-        let manifest = manifests
-            .into_iter()
-            .find(|m| m.name == name)
-            .ok_or_else(|| PluginError::NotFound(name.to_string()))?;
 
         self.compiled.insert(
             name.to_string(),
