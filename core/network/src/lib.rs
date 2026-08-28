@@ -9,7 +9,8 @@ use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use protocol_protocol::{Message, ProtocolCodec};
+use protocol_protocol::{Command, CommandResponse, Message, MessageType, ProtocolCodec};
+use protocol_routing::CommandRouter;
 use protocol_session::SessionManager;
 
 #[derive(Debug, Error)]
@@ -30,6 +31,7 @@ pub enum NetworkError {
 pub struct NetworkManager {
     tcp_listener: Option<TcpListener>,
     session_manager: Arc<SessionManager>,
+    command_router: Arc<CommandRouter>,
     codec: ProtocolCodec,
 }
 
@@ -37,6 +39,7 @@ impl NetworkManager {
     pub async fn new(
         bind_address: &str,
         session_manager: Arc<SessionManager>,
+        command_router: Arc<CommandRouter>,
     ) -> Result<Self, NetworkError> {
         let tcp_listener = TcpListener::bind(bind_address).await?;
         tracing::info!("TCP listening on {}", bind_address);
@@ -44,6 +47,7 @@ impl NetworkManager {
         Ok(Self {
             tcp_listener: Some(tcp_listener),
             session_manager,
+            command_router,
             codec: ProtocolCodec::new(),
         })
     }
@@ -67,10 +71,13 @@ impl NetworkManager {
             socket.set_nodelay(true)?;
 
             let session_manager = self.session_manager.clone();
+            let command_router = self.command_router.clone();
             let codec = self.codec.clone();
 
             tokio::spawn(async move {
-                if let Err(e) = Self::handle_connection(socket, addr, codec, session_manager).await
+                if let Err(e) =
+                    Self::handle_connection(socket, addr, codec, session_manager, command_router)
+                        .await
                 {
                     tracing::error!("Connection error from {}: {}", addr, e);
                 }
@@ -83,6 +90,7 @@ impl NetworkManager {
         addr: SocketAddr,
         codec: ProtocolCodec,
         session_manager: Arc<SessionManager>,
+        command_router: Arc<CommandRouter>,
     ) -> Result<(), NetworkError> {
         let session_id = session_manager.create_session(
             addr,
@@ -104,7 +112,7 @@ impl NetworkManager {
         full_frame.put_slice(&frame);
 
         let mut buf = full_frame;
-        let hello_msg = ProtocolCodec::decode_simple(&mut buf)?
+        let _hello_msg = ProtocolCodec::decode_simple(&mut buf)?
             .ok_or(NetworkError::Closed)?;
 
         // Send HelloAck
@@ -112,10 +120,10 @@ impl NetworkManager {
         let ack_bytes = codec.encode(&hello_ack)?;
         writer.write_all(&ack_bytes).await?;
 
-        // Mark session as authenticated
-        if let Some(mut session) = session_manager.get(session_id) {
-            session.set_state(protocol_session::SessionState::Authenticated);
-        }
+        // Mark session as authenticated. `session_manager.get()` returns a
+        // *clone* of the session, so mutating it directly (the old code here)
+        // was a no-op - go through the manager so the change is persisted.
+        session_manager.set_state(session_id, protocol_session::SessionState::Authenticated)?;
 
         tracing::info!("Session {} handshake complete", session_id);
 
@@ -141,8 +149,35 @@ impl NetworkManager {
 
                             let mut buf = full_frame;
                             if let Some(message) = ProtocolCodec::decode_simple(&mut buf)? {
-                                if let Some(session) = session_manager.get(session_id) {
-                                    let _ = session.send(message);
+                                match message.message_type {
+                                    MessageType::Command => {
+                                        let reply = Self::route_command(
+                                            &command_router,
+                                            session_id,
+                                            &message.payload,
+                                        ).await;
+                                        let encoded = codec.encode(&reply)?;
+                                        if writer.write_all(&encoded).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    MessageType::Ping => {
+                                        let encoded = codec.encode(&Message::pong())?;
+                                        if writer.write_all(&encoded).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    MessageType::Disconnect => {
+                                        tracing::info!("Session {} requested disconnect", session_id);
+                                        break;
+                                    }
+                                    other => {
+                                        tracing::debug!(
+                                            "Session {} sent unhandled message type {:?}",
+                                            session_id,
+                                            other
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -174,5 +209,43 @@ impl NetworkManager {
 
         session_manager.remove(session_id);
         Ok(())
+    }
+
+    /// Deserialize a `Command` from a decoded message's payload and dispatch it
+    /// through the `CommandRouter`, always producing a reply `Message` (a
+    /// `CommandResponse` on success or handler failure, an `Error` message if
+    /// the payload itself couldn't be parsed as a `Command`).
+    async fn route_command(
+        command_router: &CommandRouter,
+        session_id: u64,
+        payload: &[u8],
+    ) -> Message {
+        let command: Command = match rmp_serde::from_slice(payload) {
+            Ok(command) => command,
+            Err(e) => {
+                tracing::warn!(
+                    "Session {} sent an invalid command payload: {}",
+                    session_id,
+                    e
+                );
+                return Message::error(format!("Invalid command payload: {}", e));
+            }
+        };
+
+        let command_id = command.id;
+        let command_type = command.command_type.clone();
+
+        let response = match command_router.route(command, session_id).await {
+            Ok(response) => response,
+            Err(e) => CommandResponse {
+                id: command_id,
+                command_type,
+                success: false,
+                payload: vec![],
+                error: Some(e.to_string()),
+            },
+        };
+
+        Message::command_response(response)
     }
 }

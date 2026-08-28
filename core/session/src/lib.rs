@@ -88,6 +88,32 @@ impl SessionManager {
         self.sessions.get(&session_id).map(|s| s.clone())
     }
 
+    /// Mutate the stored session's state in place. `get()` returns a clone, so
+    /// mutating that clone (e.g. `session.set_state(...)`) is a no-op on the
+    /// session actually held by the manager - this goes through
+    /// `DashMap::get_mut` instead so the change is actually persisted.
+    pub fn set_state(&self, session_id: u64, state: SessionState) -> Result<(), SessionError> {
+        self.sessions
+            .get_mut(&session_id)
+            .map(|mut s| s.set_state(state))
+            .ok_or(SessionError::NotFound(session_id))
+    }
+
+    /// Associate a session with a player/character id, in place (see `set_state`).
+    pub fn set_player(&self, session_id: u64, player_id: u64) -> Result<(), SessionError> {
+        self.sessions
+            .get_mut(&session_id)
+            .map(|mut s| s.set_player(player_id))
+            .ok_or(SessionError::NotFound(session_id))
+    }
+
+    /// Look up the character/player id bound to a session, if any (via
+    /// `set_player`). Used by command handlers to resolve which character a
+    /// session's commands act on.
+    pub fn get_player_id(&self, session_id: u64) -> Option<u64> {
+        self.sessions.get(&session_id).and_then(|s| s.player_id)
+    }
+
     pub fn get_by_address(&self, addr: &SocketAddr) -> Option<u64> {
         self.address_sessions.get(addr).map(|id| *id)
     }

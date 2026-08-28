@@ -59,9 +59,9 @@ async fn run_server(bind: &str, plugin_dir: &str) -> Result<()> {
     tracing::info!("This is a Cross-Platform Game Runtime, not just a server.");
 
     let session_manager = Arc::new(SessionManager::new(1000));
-    let network = NetworkManager::new(bind, session_manager.clone()).await?;
-    let capability_manager = CapabilityManager::new(protocol_security::RuntimeCapabilities::server());
     let command_router = Arc::new(CommandRouter::new());
+    let network = NetworkManager::new(bind, session_manager.clone(), command_router.clone()).await?;
+    let capability_manager = CapabilityManager::new(protocol_security::RuntimeCapabilities::server());
     let game_world = Arc::new(RwLock::new(GameWorld::new()));
 
     // Initialize WASM plugin engine
@@ -109,19 +109,24 @@ async fn run_server(bind: &str, plugin_dir: &str) -> Result<()> {
 
     // Register built-in command handlers
     let gw = game_world.clone();
-    command_router.register("look", Arc::new(LookHandler { game_world: gw }));
+    let sm = session_manager.clone();
+    command_router.register("look", Arc::new(LookHandler { game_world: gw, session_manager: sm }));
 
     let gw = game_world.clone();
-    command_router.register("move", Arc::new(MoveHandler { game_world: gw }));
+    let sm = session_manager.clone();
+    command_router.register("move", Arc::new(MoveHandler { game_world: gw, session_manager: sm }));
 
     let gw = game_world.clone();
-    command_router.register("attack", Arc::new(AttackHandler { game_world: gw }));
+    let sm = session_manager.clone();
+    command_router.register("attack", Arc::new(AttackHandler { game_world: gw, session_manager: sm }));
 
     let gw = game_world.clone();
-    command_router.register("inventory", Arc::new(InventoryHandler { game_world: gw }));
+    let sm = session_manager.clone();
+    command_router.register("inventory", Arc::new(InventoryHandler { game_world: gw, session_manager: sm }));
 
     let gw = game_world.clone();
-    command_router.register("create_character", Arc::new(CreateCharacterHandler { game_world: gw }));
+    let sm = session_manager.clone();
+    command_router.register("create_character", Arc::new(CreateCharacterHandler { game_world: gw, session_manager: sm }));
 
     tracing::info!("Server ready. Waiting for connections...");
 
@@ -384,15 +389,36 @@ async fn run_gateway(bind: &str) -> Result<()> {
 
 // Command Handlers
 
+/// Resolve which character a session's commands should act on. Every
+/// non-creation command needs this - there is no default/shared character;
+/// a session must `create_character` first (see `CreateCharacterHandler`,
+/// which binds the session to the new character via `SessionManager::set_player`).
+fn resolve_character_id(
+    session_manager: &SessionManager,
+    session_id: u64,
+) -> Result<u64, protocol_routing::RoutingError> {
+    session_manager.get_player_id(session_id).ok_or_else(|| {
+        protocol_routing::RoutingError::HandlerError(
+            "No character for this session yet - use create_character first".to_string(),
+        )
+    })
+}
+
 struct LookHandler {
     game_world: Arc<RwLock<GameWorld>>,
+    session_manager: Arc<SessionManager>,
 }
 
 #[async_trait::async_trait]
 impl protocol_routing::CommandHandler for LookHandler {
-    async fn handle(&self, _command: Command, _session_id: u64) -> Result<CommandResponse, protocol_routing::RoutingError> {
+    async fn handle(&self, _command: Command, session_id: u64) -> Result<CommandResponse, protocol_routing::RoutingError> {
+        let character_id = resolve_character_id(&self.session_manager, session_id)?;
+
         let world = self.game_world.read().await;
-        let room_info = world.look_room(1)
+        let room_id = world.get_character(character_id)
+            .ok_or_else(|| protocol_routing::RoutingError::HandlerError("Character not found".to_string()))?
+            .room_id;
+        let room_info = world.look_room(room_id)
             .ok_or_else(|| protocol_routing::RoutingError::HandlerError("Room not found".to_string()))?;
 
         let response = LookResponse {
@@ -427,11 +453,14 @@ impl protocol_routing::CommandHandler for LookHandler {
 
 struct MoveHandler {
     game_world: Arc<RwLock<GameWorld>>,
+    session_manager: Arc<SessionManager>,
 }
 
 #[async_trait::async_trait]
 impl protocol_routing::CommandHandler for MoveHandler {
-    async fn handle(&self, command: Command, _session_id: u64) -> Result<CommandResponse, protocol_routing::RoutingError> {
+    async fn handle(&self, command: Command, session_id: u64) -> Result<CommandResponse, protocol_routing::RoutingError> {
+        let character_id = resolve_character_id(&self.session_manager, session_id)?;
+
         let move_cmd: MoveCommand = rmp_serde::from_slice(&command.payload)
             .map_err(|e| protocol_routing::RoutingError::HandlerError(e.to_string()))?;
 
@@ -445,7 +474,7 @@ impl protocol_routing::CommandHandler for MoveHandler {
         };
 
         let mut world = self.game_world.write().await;
-        match world.move_character(1, domain_dir) {
+        match world.move_character(character_id, domain_dir) {
             Ok(result) => {
                 let response = MoveResponse {
                     success: true,
@@ -486,15 +515,17 @@ impl protocol_routing::CommandHandler for MoveHandler {
 
 struct AttackHandler {
     game_world: Arc<RwLock<GameWorld>>,
+    session_manager: Arc<SessionManager>,
 }
 
 #[async_trait::async_trait]
 impl protocol_routing::CommandHandler for AttackHandler {
-    async fn handle(&self, command: Command, _session_id: u64) -> Result<CommandResponse, protocol_routing::RoutingError> {
+    async fn handle(&self, command: Command, session_id: u64) -> Result<CommandResponse, protocol_routing::RoutingError> {
+        let character_id = resolve_character_id(&self.session_manager, session_id)?;
         let target_name = String::from_utf8_lossy(&command.payload).to_string();
 
         let mut world = self.game_world.write().await;
-        match world.start_combat(1, &target_name) {
+        match world.start_combat(character_id, &target_name) {
             Ok(combat_info) => {
                 let response = AttackResponse {
                     success: true,
@@ -537,13 +568,16 @@ impl protocol_routing::CommandHandler for AttackHandler {
 
 struct InventoryHandler {
     game_world: Arc<RwLock<GameWorld>>,
+    session_manager: Arc<SessionManager>,
 }
 
 #[async_trait::async_trait]
 impl protocol_routing::CommandHandler for InventoryHandler {
-    async fn handle(&self, _command: Command, _session_id: u64) -> Result<CommandResponse, protocol_routing::RoutingError> {
+    async fn handle(&self, _command: Command, session_id: u64) -> Result<CommandResponse, protocol_routing::RoutingError> {
+        let character_id = resolve_character_id(&self.session_manager, session_id)?;
+
         let world = self.game_world.read().await;
-        let inventory = world.get_inventory(1).cloned().unwrap_or_else(|| Inventory::new());
+        let inventory = world.get_inventory(character_id).cloned().unwrap_or_else(|| Inventory::new());
 
         let response = InventoryResponse {
             items: inventory.items.into_iter().map(|i| protocol_protocol::InventoryItem {
@@ -570,11 +604,12 @@ impl protocol_routing::CommandHandler for InventoryHandler {
 
 struct CreateCharacterHandler {
     game_world: Arc<RwLock<GameWorld>>,
+    session_manager: Arc<SessionManager>,
 }
 
 #[async_trait::async_trait]
 impl protocol_routing::CommandHandler for CreateCharacterHandler {
-    async fn handle(&self, command: Command, _session_id: u64) -> Result<CommandResponse, protocol_routing::RoutingError> {
+    async fn handle(&self, command: Command, session_id: u64) -> Result<CommandResponse, protocol_routing::RoutingError> {
         let create_cmd: CreateCharacterCommand = rmp_serde::from_slice(&command.payload)
             .map_err(|e| protocol_routing::RoutingError::HandlerError(e.to_string()))?;
 
@@ -583,6 +618,13 @@ impl protocol_routing::CommandHandler for CreateCharacterHandler {
             Ok(mut character) => {
                 let character_id = character.id;
                 world.add_character(character);
+
+                // Bind this session to the character it just created, so
+                // subsequent look/move/attack/inventory commands from this
+                // session know which character to act on.
+                self.session_manager
+                    .set_player(session_id, character_id)
+                    .map_err(|e| protocol_routing::RoutingError::HandlerError(e.to_string()))?;
 
                 let response = CreateCharacterResponse {
                     success: true,
