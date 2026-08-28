@@ -27,7 +27,9 @@
 //! research got wrong and the compiler caught: gdext's `dict!` macro takes
 //! `"key" => value`, not `"key": value`.
 //!
-//! Anything still unverified is flagged inline below.
+//! This crate now compiles cleanly under CI. What remains unverified is
+//! runtime behavior: no Godot binary was available to actually load the
+//! library, instantiate ProtocolCore, or observe a signal reach GDScript.
 
 use std::cell::RefCell;
 

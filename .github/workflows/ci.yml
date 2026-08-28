@@ -43,14 +43,12 @@ jobs:
         run: cargo test --workspace --verbose
 
   godot-bindings:
-    name: cargo build (bindings/godot, advisory)
+    name: cargo build (bindings/godot)
     runs-on: ubuntu-latest
-    # Advisory: bindings/godot depends on the external gdext crate, whose
-    # exact version and macro API were researched from docs but never
-    # compiled (see bindings/godot/src/lib.rs header). It's excluded from
-    # the workspace so a wrong version can't break the core's CI - this job
-    # exists purely to surface the real compiler output so it can be fixed.
-    continue-on-error: true
+    # Blocking as of the commit that made this crate compile. It's excluded
+    # from the root workspace (pulling gdext/godot-codegen roughly triples
+    # build time for everyone who doesn't need it), so without this job
+    # nothing would ever build it and it would silently rot.
     steps:
       - uses: actions/checkout@v4
 
