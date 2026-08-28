@@ -2,8 +2,9 @@
 **/target
 Cargo.lock.bak
 
-# entity-naming lives in its own separate git repo
+# entity-naming and godot-client live in their own separate git repos
 /entity-naming
+/godot-client
 
 # editor / OS
 .vscode/
