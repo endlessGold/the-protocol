@@ -55,6 +55,64 @@ pub struct Npc {
     pub room_id: u32,
     pub hp: u32,
     pub max_hp: u32,
+    /// Used for XP awards when this NPC is defeated (`Combatant::level`).
+    pub level: u32,
+    /// Effective offensive power for damage calculation (`Combatant::offense`).
+    pub attack: u32,
+    /// Effective defensive power for damage calculation (`Combatant::defense`).
+    pub defense: u32,
+}
+
+impl Npc {
+    pub fn take_damage(&mut self, amount: u32) -> u32 {
+        let actual = amount.min(self.hp);
+        self.hp -= actual;
+        actual
+    }
+
+    pub fn is_alive(&self) -> bool {
+        self.hp > 0
+    }
+}
+
+impl crate::combatant::Combatant for Npc {
+    fn combatant_id(&self) -> u64 {
+        self.id
+    }
+
+    fn combatant_name(&self) -> &str {
+        &self.name
+    }
+
+    fn hp(&self) -> u32 {
+        self.hp
+    }
+
+    fn max_hp(&self) -> u32 {
+        self.max_hp
+    }
+
+    fn level(&self) -> u32 {
+        self.level
+    }
+
+    fn take_damage(&mut self, amount: u32) -> u32 {
+        Npc::take_damage(self, amount)
+    }
+
+    fn is_alive(&self) -> bool {
+        Npc::is_alive(self)
+    }
+
+    fn offense(&self) -> u32 {
+        self.attack
+    }
+
+    fn defense(&self) -> u32 {
+        self.defense
+    }
+
+    // grant_experience: default no-op - NPCs don't level up.
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,6 +208,9 @@ impl World {
             room_id: 1,
             hp: 100,
             max_hp: 100,
+            level: 5,
+            attack: 12,
+            defense: 10,
         });
 
         self.npcs.insert(2, Npc {
@@ -159,6 +220,9 @@ impl World {
             room_id: 2,
             hp: 50,
             max_hp: 50,
+            level: 2,
+            attack: 8,
+            defense: 4,
         });
 
         self.npcs.insert(3, Npc {
@@ -168,6 +232,9 @@ impl World {
             room_id: 3,
             hp: 120,
             max_hp: 120,
+            level: 4,
+            attack: 10,
+            defense: 8,
         });
 
         self.npcs.insert(4, Npc {
@@ -177,6 +244,9 @@ impl World {
             room_id: 5,
             hp: 30,
             max_hp: 30,
+            level: 1,
+            attack: 5,
+            defense: 2,
         });
     }
 

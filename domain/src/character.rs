@@ -138,3 +138,45 @@ impl Character {
         events
     }
 }
+
+impl crate::combatant::Combatant for Character {
+    fn combatant_id(&self) -> u64 {
+        self.id
+    }
+
+    fn combatant_name(&self) -> &str {
+        &self.name
+    }
+
+    fn hp(&self) -> u32 {
+        self.hp
+    }
+
+    fn max_hp(&self) -> u32 {
+        self.max_hp
+    }
+
+    fn level(&self) -> u32 {
+        self.level
+    }
+
+    fn take_damage(&mut self, amount: u32) -> u32 {
+        Character::take_damage(self, amount)
+    }
+
+    fn is_alive(&self) -> bool {
+        Character::is_alive(self)
+    }
+
+    fn offense(&self) -> u32 {
+        self.stats.strength
+    }
+
+    fn defense(&self) -> u32 {
+        self.stats.constitution
+    }
+
+    fn grant_experience(&mut self, xp: u64) -> Vec<crate::event::DomainEvent> {
+        self.gain_experience(xp)
+    }
+}

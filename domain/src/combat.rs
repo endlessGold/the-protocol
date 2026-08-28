@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::character::Character;
+use crate::combatant::Combatant;
 use crate::event::DomainEvent;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,11 +45,11 @@ impl Combat {
         }
     }
 
-    pub fn calculate_damage(attacker: &Character, target: &Character) -> u32 {
+    pub fn calculate_damage(attacker: &dyn Combatant, target: &dyn Combatant) -> u32 {
         use rand::Rng;
 
-        let base_damage = attacker.stats.strength as f64;
-        let defense = target.stats.constitution as f64 * 0.5;
+        let base_damage = attacker.offense() as f64;
+        let defense = target.defense() as f64 * 0.5;
         let raw_damage = (base_damage - defense).max(1.0);
 
         let mut rng = rand::thread_rng();
@@ -58,21 +58,30 @@ impl Combat {
         final_damage.max(1.0) as u32
     }
 
+    /// Resolve one attack. `attacker`/`target` can be any mix of `Character`
+    /// and `Npc` (both implement `Combatant`) - this is what
+    /// `application::GameWorld::start_combat()` should call instead of
+    /// hand-rolling damage math against a fabricated fake `Character`.
     pub fn process_attack(
         &mut self,
-        attacker: &mut Character,
-        target: &mut Character,
+        attacker: &mut dyn Combatant,
+        target: &mut dyn Combatant,
     ) -> Vec<DomainEvent> {
         let mut events = Vec::new();
 
-        let damage = Self::calculate_damage(attacker, target);
+        let damage = Self::calculate_damage(&*attacker, &*target);
         target.take_damage(damage);
 
         self.log.push(CombatAction {
             actor_id: self.attacker_id,
             action_type: CombatActionType::Attack,
             damage: Some(damage),
-            message: format!("{} hits {} for {} damage!", attacker.name, target.name, damage),
+            message: format!(
+                "{} hits {} for {} damage!",
+                attacker.combatant_name(),
+                target.combatant_name(),
+                damage
+            ),
         });
 
         events.push(DomainEvent::AttackExecuted {
@@ -86,8 +95,8 @@ impl Combat {
             self.state = CombatState::Finished {
                 winner_id: self.attacker_id,
             };
-            let xp = 100 * target.level as u64;
-            let level_events = attacker.gain_experience(xp);
+            let xp = 100 * target.level() as u64;
+            let level_events = attacker.grant_experience(xp);
             events.extend(level_events);
 
             events.push(DomainEvent::CombatEnded {

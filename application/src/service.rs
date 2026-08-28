@@ -43,6 +43,12 @@ pub struct GameWorld {
     combats: HashMap<u64, Combat>,
     next_character_id: u64,
     next_combat_id: u64,
+    /// Domain events produced by the last batch of GameWorld operations,
+    /// waiting to be drained by the caller (e.g. a command handler, which
+    /// translates them via `protocol_presentation::translate_event` and
+    /// forwards them to connected clients / an embedded engine). See
+    /// docs/11-presentation/01-presentation-command-protocol.md.
+    pending_events: Vec<DomainEvent>,
 }
 
 impl GameWorld {
@@ -51,9 +57,27 @@ impl GameWorld {
             characters: HashMap::new(),
             world: World::new(),
             combats: HashMap::new(),
-            next_character_id: 1,
+            // NPCs are statically defined in World::initialize() with small
+            // hardcoded ids (currently 1-4). Characters and NPCs share one
+            // u64 entity_id space as far as the presentation layer is
+            // concerned (see core/presentation's PresentationCommand), so
+            // starting character ids well above the NPC range avoids an id
+            // collision between e.g. Character #1 and the Town Guard NPC
+            // #1. This is a pragmatic reservation, not a real shared
+            // allocator - if NPCs ever get created dynamically at runtime,
+            // this needs a proper shared id source instead.
+            next_character_id: 1000,
             next_combat_id: 1,
+            pending_events: Vec::new(),
         }
+    }
+
+    /// Take all `DomainEvent`s produced since the last drain. Call this
+    /// after each command that mutates the world (see create_character/
+    /// move_character/start_combat) to get what happened in a form that can
+    /// be translated to `PresentationCommand`s and forwarded to clients.
+    pub fn drain_events(&mut self) -> Vec<DomainEvent> {
+        std::mem::take(&mut self.pending_events)
     }
 
     pub fn create_character(&mut self, name: String, class: &str) -> Result<Character, ApplicationError> {
@@ -73,6 +97,12 @@ impl GameWorld {
         character.room_id = 1;
 
         tracing::info!("Created character: {} ({}) in room 1", character.name, character.id);
+
+        self.pending_events.push(DomainEvent::CharacterCreated {
+            character_id: character.id,
+            name: character.name.clone(),
+        });
+
         Ok(character)
     }
 
@@ -150,6 +180,15 @@ impl GameWorld {
         let new_room = self.world.get_room(new_room_id)
             .ok_or(ApplicationError::NoExit)?;
 
+        self.pending_events.push(DomainEvent::PlayerLeftRoom {
+            player_id: character_id,
+            room_id: current_room_id,
+        });
+        self.pending_events.push(DomainEvent::PlayerEnteredRoom {
+            player_id: character_id,
+            room_id: new_room_id,
+        });
+
         Ok(MoveResult {
             from_room_id: current_room_id,
             to_room_id: new_room_id,
@@ -163,59 +202,44 @@ impl GameWorld {
         attacker_id: u64,
         target_name: &str,
     ) -> Result<CombatInfo, ApplicationError> {
-        let attacker = self.characters.get(&attacker_id)
-            .ok_or(ApplicationError::CharacterNotFound(attacker_id))?
-            .clone();
-
         if attacker_id == 0 {
             return Err(ApplicationError::SelfAttack);
         }
 
-        let target_npc = self.world.find_npc_in_room(attacker.room_id, target_name)
+        let attacker_room_id = self.characters.get(&attacker_id)
+            .ok_or(ApplicationError::CharacterNotFound(attacker_id))?
+            .room_id;
+
+        let target_npc_id = self.world.find_npc_in_room(attacker_room_id, target_name)
             .ok_or_else(|| ApplicationError::NpcNotFound(0))?
-            .clone();
+            .id;
 
         let combat_id = self.next_combat_id;
         self.next_combat_id += 1;
 
-        let mut combat = Combat::new(attacker_id, target_npc.id);
+        let mut combat = Combat::new(attacker_id, target_npc_id);
         combat.id = combat_id;
 
-        // Process attack
+        // Both `characters` and `world` are distinct fields of `self`, so
+        // these two mutable borrows can coexist - see Combat::process_attack,
+        // which is generic over `&mut dyn Combatant` and no longer needs a
+        // fabricated fake Character to fight an Npc.
         let attacker = self.characters.get_mut(&attacker_id).unwrap();
-        let target_npc = self.world.get_npc_mut(target_npc.id).unwrap();
+        let target_npc = self.world.get_npc_mut(target_npc_id).unwrap();
 
-        // Simple attack for now - create a temporary character-like struct for damage calc
-        let target_stats = Stats {
-            strength: 5,
-            dexterity: 5,
-            intelligence: 5,
-            wisdom: 5,
-            constitution: 10,
-        };
+        let events = combat.process_attack(attacker, target_npc);
 
-        let damage = Combat::calculate_damage(attacker, &Character {
-            id: target_npc.id,
-            name: target_npc.name.clone(),
-            class: CharacterClass::Warrior,
-            level: 1,
-            experience: 0,
-            hp: target_npc.hp,
-            max_hp: target_npc.max_hp,
-            mp: 0,
-            max_mp: 0,
-            stats: target_stats,
-            room_id: target_npc.room_id,
-            inventory: Inventory::new(),
-        });
-
-        target_npc.hp = target_npc.hp.saturating_sub(damage);
-
+        let damage = events.iter().find_map(|e| match e {
+            DomainEvent::AttackExecuted { damage, .. } => Some(*damage),
+            _ => None,
+        }).unwrap_or(0);
         let message = format!("You hit {} for {} damage!", target_npc.name, damage);
         let target_hp = target_npc.hp;
+        let target_max_hp = target_npc.max_hp;
         let target_name = target_npc.name.clone();
 
         self.combats.insert(combat_id, combat);
+        self.pending_events.extend(events);
 
         Ok(CombatInfo {
             combat_id,
@@ -223,7 +247,7 @@ impl GameWorld {
             damage,
             target_name,
             target_hp,
-            target_max_hp: target_npc.max_hp,
+            target_max_hp,
         })
     }
 

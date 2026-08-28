@@ -10,13 +10,15 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use protocol_domain::DomainEvent;
 
 /// The value types every property/effect parameter is expressed in. Kept
 /// deliberately small (design doc §3) - the moment this list grows,
 /// everything downstream (shader params, stats, UI labels) has to grow with
 /// it, which is exactly the churn this protocol exists to avoid.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PropertyValue {
     Int(i64),
     Float(f64),
@@ -63,7 +65,7 @@ impl From<&str> for PropertyValue {
 /// What kind of thing is being spawned. The engine decides how each kind
 /// actually looks (model, sprite, particle system, ...) - the core only
 /// ever names it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EntityKind {
     Player,
     Npc,
@@ -71,7 +73,12 @@ pub enum EntityKind {
 
 /// A command the core sends to the engine. See design doc §1 for the full
 /// rationale and the mapping to domain concepts.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Serializable so it can travel two ways: in-process (embedded engine
+/// calls `PresentationSink::send` directly) or over the wire, wrapped in a
+/// `protocol_protocol::Event` (see docs/11-presentation §7) for a
+/// networked multiplayer client.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PresentationCommand {
     SpawnEntity {
         entity_id: u64,
@@ -111,7 +118,7 @@ pub enum PresentationCommand {
 }
 
 /// A command the engine sends back to the core. See design doc §2.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum EngineInput {
     Action {
         action: String,
@@ -146,12 +153,11 @@ impl PresentationSink for VecSink {
 /// Translate a `DomainEvent` into zero or more `PresentationCommand`s.
 ///
 /// This is a *partial* mapping, deliberately - design doc §6 explains why.
-/// Most `DomainEvent` variants aren't actually produced by the live code
-/// path yet (`GameWorld::start_combat()` bypasses `Combat::process_attack()`,
-/// the only place that builds `AttackExecuted`/`CombatEnded`/some
-/// `LevelUp`s). Variants handled here will start working the moment that
-/// gets fixed. `CombatStarted` maps to nothing on purpose rather than a
-/// guessed-at command - see the match arm.
+/// `GameWorld::start_combat()` now calls `Combat::process_attack()` (fixed
+/// 2026-08-28, the-protocol#26/#27), so `AttackExecuted`/`CombatEnded`/
+/// combat-driven `LevelUp` events do fire on the live path. `CombatStarted`
+/// still maps to nothing on purpose rather than a guessed-at command - see
+/// the match arm.
 pub fn translate_event(event: &DomainEvent) -> Vec<PresentationCommand> {
     match event {
         DomainEvent::CharacterCreated { character_id, name } => vec![PresentationCommand::SpawnEntity {

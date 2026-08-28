@@ -404,6 +404,54 @@ fn resolve_character_id(
     })
 }
 
+/// Translate `DomainEvent`s produced by a `GameWorld` call into
+/// `PresentationCommand`s (see `protocol_presentation::translate_event`) and
+/// forward them to every connected session as a `protocol_protocol::Event`,
+/// so a networked client (a plain MUD client, or a future Godot client
+/// speaking this same protocol) can react to what just happened.
+///
+/// This broadcasts to *every* session rather than only the ones actually
+/// affected (e.g. players in the room something happened in) - proper
+/// room-scoped targeting needs session_id -> player_id -> Character.room_id
+/// cross-referencing that doesn't exist yet (session_manager.get_player_id()
+/// exists; there's no equivalent lookup from a session back to "what room is
+/// this player in" without also holding a GameWorld read lock here). Tracked
+/// as a follow-up; broadcasting everything is correct, just not scoped -
+/// clients receiving an update for a room they're not in can ignore it.
+fn dispatch_events(events: Vec<protocol_domain::DomainEvent>, session_manager: &SessionManager) {
+    if events.is_empty() {
+        return;
+    }
+
+    let commands: Vec<protocol_presentation::PresentationCommand> = events
+        .iter()
+        .flat_map(protocol_presentation::translate_event)
+        .collect();
+
+    if commands.is_empty() {
+        return;
+    }
+
+    let payload = match rmp_serde::to_vec(&commands) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            tracing::warn!("Failed to serialize presentation commands: {}", e);
+            return;
+        }
+    };
+
+    let event = Event {
+        id: rand::random(),
+        event_type: "presentation_batch".to_string(),
+        timestamp: chrono::Utc::now().timestamp_millis() as u64,
+        source: "server".to_string(),
+        payload,
+        targets: None,
+    };
+
+    session_manager.broadcast(&Message::event(event), None);
+}
+
 struct LookHandler {
     game_world: Arc<RwLock<GameWorld>>,
     session_manager: Arc<SessionManager>,
@@ -474,7 +522,12 @@ impl protocol_routing::CommandHandler for MoveHandler {
         };
 
         let mut world = self.game_world.write().await;
-        match world.move_character(character_id, domain_dir) {
+        let move_result = world.move_character(character_id, domain_dir);
+        let events = world.drain_events();
+        drop(world);
+        dispatch_events(events, &self.session_manager);
+
+        match move_result {
             Ok(result) => {
                 let response = MoveResponse {
                     success: true,
@@ -525,7 +578,12 @@ impl protocol_routing::CommandHandler for AttackHandler {
         let target_name = String::from_utf8_lossy(&command.payload).to_string();
 
         let mut world = self.game_world.write().await;
-        match world.start_combat(character_id, &target_name) {
+        let combat_result = world.start_combat(character_id, &target_name);
+        let events = world.drain_events();
+        drop(world);
+        dispatch_events(events, &self.session_manager);
+
+        match combat_result {
             Ok(combat_info) => {
                 let response = AttackResponse {
                     success: true,
@@ -618,6 +676,10 @@ impl protocol_routing::CommandHandler for CreateCharacterHandler {
             Ok(mut character) => {
                 let character_id = character.id;
                 world.add_character(character);
+
+                let events = world.drain_events();
+                drop(world);
+                dispatch_events(events, &self.session_manager);
 
                 // Bind this session to the character it just created, so
                 // subsequent look/move/attack/inventory commands from this

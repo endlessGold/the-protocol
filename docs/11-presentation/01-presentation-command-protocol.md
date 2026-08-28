@@ -66,21 +66,90 @@ Godot 바인더가 이 트레이트를 구현해서 시그널로 재발행하게
 Vec에 쌓는 것 등)도 쉽게 만들 수 있다. 바인더가 아직 없어도 이 계층은 지금
 바로 만들고 테스트할 수 있다.
 
-## 6. 정직하게 짚어야 할 문제 — 이벤트가 아직 안 나온다
+## 6. 엔티티 모델 통합 — 완료 (2026-08-28)
 
-`DomainEvent`를 실제로 만들어서 반환하는 곳은 코드 전체에서 **딱 두 곳**이다:
+원래 여기엔 "이벤트가 아직 안 나온다"는 문제가 적혀 있었다. 원인과 수정 내역을
+기록으로 남긴다.
 
-- `domain::Character::gain_experience()` → `LevelUp`
-- `domain::Combat::process_attack()` → `AttackExecuted`, (죽으면) `LevelUp` + `CombatEnded`
+`DomainEvent`를 실제로 만들어서 반환하는 곳은 코드 전체에서 **딱 두 곳**이었다
+(`domain::Character::gain_experience()` → `LevelUp`, `domain::Combat::
+process_attack()` → `AttackExecuted`/(죽으면) `LevelUp`+`CombatEnded`). 그런데
+**`application::GameWorld::start_combat()`(실제 네트워크 커맨드가 타는 경로)은
+`process_attack()`을 호출하지 않고** 자기만의 단순 데미지 계산을 따로 했다 —
+이벤트를 하나도 만들지 않았다.
 
-그런데 **`application::GameWorld::start_combat()`(실제로 네트워크 커맨드가 호출하는 경로)은 `process_attack()`을 호출하지 않는다.** 대신 자기만의 단순한 데미지 계산을 따로 하고, 이벤트를 하나도 만들지 않는다.
+원인: `process_attack(attacker: &mut Character, target: &mut Character)`은
+양쪽 다 `Character` 타입이어야 했는데, NPC는 `Npc`라는 별개 타입이었다(스탯도
+`take_damage()`도 없음). `start_combat()`은 이 때문에 NPC 데미지 계산을 위해
+"가짜 Character를 즉석에서 만드는" 우회를 쓰고 있었다(모든 NPC가 위협 수준과
+무관하게 똑같은 `Stats{5,5,5,5,10}`을 가짐).
 
-왜 이렇게 됐는지도 확인했다 — **`process_attack(attacker: &mut Character, target: &mut Character)`은 양쪽 다 `Character` 타입이어야 하는데, NPC는 `Npc`라는 별개 타입이다** (스탯도, `take_damage()`도, `gain_experience()`도 없음). 그래서 `start_combat()`은 NPC 데미지 계산을 위해 "가짜 Character를 즉석에서 만드는" 우회를 쓰고 있다 (known-issues #13). `process_attack()`을 그대로 쓰려면 `Npc`가 최소한 데미지를 받고 확인할 수 있는 공통 인터페이스가 있어야 한다 — 이게 바로 지난 대화에서 나온 "엔티티 모델 통일"의 구체적인 실체다.
+**수정**: `domain::Combatant` 트레이트를 추가하고(`domain/src/combatant.rs`)
+`Character`/`Npc` 둘 다 구현하게 했다. `Npc`에 `level`/`attack`/`defense`
+필드를 새로 추가하고(기존 4개 NPC에 설명에 맞는 실제 값 부여 — 마을 경비병은
+강하게, 고블린은 약하게), `Combat::calculate_damage`/`process_attack`을
+`&(mut) dyn Combatant`를 받도록 일반화했다. `start_combat()`은 이제
+`combat.process_attack(&mut character, &mut npc)`을 그대로 호출한다 — 가짜
+Character 우회 삭제. `create_character()`/`move_character()`도 각각
+`CharacterCreated`/`PlayerEnteredRoom`+`PlayerLeftRoom`을 내보내도록 고쳤다
+(전에는 그 이벤트들조차 어디서도 발행되지 않았다).
 
-**결론**: 프레젠테이션 커맨드 프로토콜(이 문서, §1~5)은 지금 바로 만들고 테스트할 수 있다 — `DomainEvent`가 실제로 얼마나 나오는지와 무관하게 독립적인 계층이다. 다만 **실제로 전투 중 `AttackExecuted`/`CombatEnded`가 흘러나오게 하려면 `Npc`/`Character` 통합이 선행되어야 한다.** 이 순서를 바꿔서 이벤트 배관부터 서두르면, 결국 지금의 "가짜 Character" 우회를 프레젠테이션 계층까지 끌고 올라가게 된다.
+`GameWorld`에 `pending_events: Vec<DomainEvent>` 큐 + `drain_events()`를
+추가했다 — 상태를 바꾸는 메서드(`create_character`/`move_character`/
+`start_combat`)는 이제 이벤트를 큐에 쌓고, 호출자가 작업이 끝난 뒤
+`drain_events()`로 걷어간다.
 
-## 7. 참고 이슈
+**엔티티 ID 충돌 주의**: `Character`와 `Npc`는 이제 하나의 프레젠테이션
+`entity_id`(u64) 공간을 공유한다. NPC는 `World::initialize()`에서 정적으로
+1~4번을 쓰므로, `GameWorld.next_character_id`의 시작값을 1000으로 올려서
+당장의 충돌은 피했다 — 다만 이건 임시방편이다. NPC가 나중에 런타임에 동적으로
+생성되면 진짜 공유 ID 할당자가 필요하다.
 
-- 엔티티 모델 통일 (Npc/Character): 신규 등록 예정
-- `GameWorld::start_combat()`이 `Combat::process_attack()`을 안 씀: 신규 등록 예정
-- 도메인 이벤트 디스패처 부재: known-issues #17 (이 문서의 §6이 그 구체적인 원인 분석)
+**아직 손 안 댐**: `core/plugin`의 `PlayerData`/`CombatState`는 이 통합과
+완전히 별개다 — `core/plugin`은 `protocol_domain`/`protocol_application`에
+의존하지 않는 독립된 섬이라, 거기까지 통합하는 건 훨씬 큰 별도 작업이다.
+
+## 7. 네트워크 배선 — 멀티플레이어
+
+Godot 클라이언트가 임베디드(FFI)로만 동작하는 게 아니라 **일반 멀티플레이어
+클라이언트로도 접속할 수 있어야 한다**는 결정에 따라, 기존 TCP 프로토콜 위에
+프레젠테이션 커맨드를 실어 보내는 배선을 추가했다.
+
+**포맷 재사용**: 새 `MessageType`을 만들지 않고 기존 `MessageType::Event` +
+`Event { id, event_type, timestamp, source, payload, targets }`를 그대로
+썼다 — `payload`는 `Vec<PresentationCommand>`를 `rmp_serde`로 직렬화한
+바이트, `event_type = "presentation_batch"`로 태그. `protocol-protocol`이
+`protocol-presentation`을 몰라도 되게(불투명한 바이트로만 다룸) 하기 위한
+선택이다.
+
+**배선 지점**: `core/runtime/src/main.rs`의 `dispatch_events()` 헬퍼 —
+`Vec<DomainEvent>`를 받아 `translate_event()`로 펼치고, 직렬화해서
+`Event`로 감싸고, `SessionManager::broadcast()`로 보낸다. `MoveHandler`/
+`AttackHandler`/`CreateCharacterHandler`가 각자 `GameWorld` 호출 후
+`drain_events()` → `dispatch_events()` 순으로 부른다.
+
+**지금은 방(room) 단위로 타게팅 안 함 — 전체 브로드캐스트**: 어떤 세션이 어느
+방에 있는 플레이어인지(session_id → player_id → Character.room_id)를
+교차 조회하는 로직이 아직 없어서, 일단 연결된 모든 세션에 전부 보낸다.
+클라이언트가 자기 방과 무관한 갱신을 받아도 무시하면 되니 틀린 동작은
+아니지만, 최적은 아니다 — 후속 이슈로 등록.
+
+### 7.1 참고: 이 경로는 사실 gdext 없이도 갈 수 있다
+
+§7의 배선(TCP + MessagePack `Event`)은 순수 GDScript TCP 클라이언트로도 받을
+수 있다 — `bindings/godot`(gdext FFI)가 없어도 멀티플레이어 접속 자체는
+가능하다는 뜻이다. 다만 **Godot 4 GDScript에는 MessagePack 코덱이 내장되어
+있지 않다** — 손으로 구현하려면(정수 크기별 태그, 문자열/배열/맵 인코딩 등)
+컴파일해서 검증할 방법 없이 짜기엔 꽤 위험한 분량이라, 이번 패스에서는
+시도하지 않았다. 대안은: (a) GDScript MessagePack 코덱을 직접 짜거나, (b) 이
+채널만 GDScript에 내장된 `JSON`으로 바꾸거나(다른 프로토콜 메시지는 그대로
+MessagePack 유지), (c) `bindings/godot`가 준비될 때까지 기다려서 역직렬화를
+러스트 쪽에서 끝내고 시그널만 던지게 하거나. 후속 이슈로 등록.
+
+## 8. 참고 이슈
+
+- ~~엔티티 모델 통일 (Npc/Character)~~: the-protocol #26 — 완료 (§6)
+- ~~`GameWorld::start_combat()`이 `Combat::process_attack()`을 안 씀~~: the-protocol #27 — 완료 (§6)
+- `DomainEvent` 디스패처: the-protocol #28 — §6/§7로 대체 완료
+- 방(room) 단위 브로드캐스트 타게팅: 신규 등록 예정 (§7)
+- `bindings/godot` 크레이트: the-protocol #29 — 여전히 gdext API 실검증 대기 중

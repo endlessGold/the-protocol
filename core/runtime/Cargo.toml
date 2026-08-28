@@ -33,3 +33,4 @@ protocol-routing = { path = "../routing" }
 protocol-observability = { path = "../observability" }
 protocol-domain = { path = "../../domain" }
 protocol-application = { path = "../../application" }
+protocol-presentation = { path = "../presentation" }
