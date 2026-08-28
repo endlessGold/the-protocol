@@ -1,0 +1,69 @@
+name: CI
+
+# Why this exists: the local dev sandbox this project has largely been
+# developed from cannot run `cargo build` at all (Windows Application
+# Control Policy blocks execution of newly-built proc-macro build-script
+# executables - confirmed via `cargo check -p protocol-protocol` failing
+# with os error 4551). Every Rust change up to this workflow's own commit
+# was written carefully but never actually compiled. This workflow is the
+# real compiler-in-the-loop that sandbox couldn't provide - GitHub's hosted
+# runners aren't subject to that local policy at all.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-test:
+    name: cargo build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          # entity-naming/ is a separate TypeScript project living in this
+          # same checkout - nothing Rust there, exclude it from the cache key.
+          workspaces: ". -> target"
+
+      - name: cargo build --workspace
+        run: cargo build --workspace --verbose
+
+      - name: cargo test --workspace
+        run: cargo test --workspace --verbose
+
+  fmt-and-clippy:
+    name: cargo fmt --check & clippy
+    runs-on: ubuntu-latest
+    # Advisory only for now - this codebase has known style/warning debt
+    # (see docs/00-status/known-issues.md #20) that isn't this workflow's
+    # job to block on; it's here so warnings are visible without failing CI.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
