@@ -63,6 +63,112 @@ jobs:
       - name: cargo build --manifest-path bindings/godot/Cargo.toml
         run: cargo build --manifest-path bindings/godot/Cargo.toml --verbose
 
+      - name: Build release cdylib for the Godot test
+        run: cargo build --release --manifest-path bindings/godot/Cargo.toml
+
+      - name: Upload cdylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-godot-linux
+          path: bindings/godot/target/release/libprotocol_godot.so
+          if-no-files-found: error
+
+  godot-integration:
+    name: Godot headless integration
+    runs-on: ubuntu-latest
+    needs: godot-bindings
+    # Actually loads the GDExtension in a real Godot and drives it from
+    # GDScript. Everything before this job only proved the Rust side
+    # compiles - this is the first thing that proves Godot can USE it.
+    #
+    # Three findings drive how this is written (all confirmed by observed
+    # behaviour, not just docs):
+    #   1. Godot only loads extensions listed in .godot/extension_list.cfg,
+    #      which a fresh checkout doesn't have - hence the --import step.
+    #   2. A GDExtension load failure prints to stderr but leaves the exit
+    #      code at 0, so exit status alone is NOT a valid gate. We tee
+    #      stderr and grep it.
+    #   3. A GDScript that names a class the extension failed to register
+    #      is a *parse* error, which in headless can hang forever - so the
+    #      test resolves the class through ClassDB by name, never as an
+    #      identifier, and every run is wrapped in `timeout`.
+    env:
+      GODOT_VERSION: "4.4.1"
+    steps:
+      - name: Checkout core
+        uses: actions/checkout@v4
+
+      - name: Checkout godot-client
+        uses: actions/checkout@v4
+        with:
+          repository: endlessGold/godot-client
+          path: godot-client
+
+      - name: Download cdylib
+        uses: actions/download-artifact@v4
+        with:
+          name: protocol-godot-linux
+          path: godot-client/bin
+
+      - name: Install Godot ${{ env.GODOT_VERSION }}
+        run: |
+          set -euxo pipefail
+          # Editor build, NOT an export template: --script and --import are
+          # editor-only flags, and Godot silently ignores unknown flags on
+          # template builds (i.e. the tests would appear to pass while
+          # never running). Must also be >= 4.3: on 4.2 and earlier
+          # SceneTree.quit(1) silently exited 0.
+          url="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          curl -fsSL -o godot.zip "$url"
+          unzip -q godot.zip
+          mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" /usr/local/bin/godot
+          chmod +x /usr/local/bin/godot
+          godot --version
+
+      - name: Show staged library
+        run: ls -la godot-client/bin/
+
+      - name: Import project (creates .godot/extension_list.cfg)
+        run: |
+          set -uxo pipefail
+          timeout 300 godot --headless --path godot-client --import 2>&1 | tee import.log || true
+          echo "--- extension_list.cfg ---"
+          cat godot-client/.godot/extension_list.cfg || echo "MISSING"
+
+      - name: Fail if the extension did not load
+        run: |
+          set -euo pipefail
+          if grep -qiE "GDExtension.*(not found|failed|error)|Can't open dynamic library" import.log; then
+            echo "::error::GDExtension failed to load - see import.log above"
+            grep -iE "GDExtension|dynamic library" import.log || true
+            exit 1
+          fi
+          if ! grep -q "core.gdextension" godot-client/.godot/extension_list.cfg; then
+            echo "::error::core.gdextension is not in extension_list.cfg - Godot never registered it"
+            exit 1
+          fi
+          echo "Extension loaded cleanly."
+
+      - name: Bridge test (no extension required)
+        run: |
+          set -uo pipefail
+          timeout 300 godot --headless --path godot-client \
+            --script res://tests/bridge_smoke_test.gd 2>&1 | tee bridge.log
+          status=${PIPESTATUS[0]}
+          grep -q "BRIDGE_TEST_RESULT: PASS" bridge.log || {
+            echo "::error::bridge test did not report PASS"; exit 1; }
+          exit $status
+
+      - name: Extension test (drives ProtocolCore from GDScript)
+        run: |
+          set -uo pipefail
+          timeout 300 godot --headless --path godot-client \
+            --script res://tests/extension_smoke_test.gd 2>&1 | tee ext.log
+          status=${PIPESTATUS[0]}
+          grep -q "EXTENSION_TEST_RESULT: PASS" ext.log || {
+            echo "::error::extension test did not report PASS"; exit 1; }
+          exit $status
+
   fmt-and-clippy:
     name: cargo fmt --check & clippy
     runs-on: ubuntu-latest
