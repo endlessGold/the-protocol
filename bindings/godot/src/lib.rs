@@ -12,16 +12,22 @@
 //! `PresentationCommand` vocabulary. That keeps this file nearly static as
 //! the core evolves - see the design doc's rationale.
 //!
-//! ## Verification status - READ THIS FIRST
+//! ## Verification status
 //!
-//! The gdext API used below was researched from the godot-rust book, the
-//! gdext repo README, and docs.rs, but **has never been compiled**: the
-//! sandbox this was written in cannot run `cargo build` (Windows
-//! Application Control Policy, os error 4551), and CI cannot build it
-//! either without a Godot/gdext toolchain set up. Items are annotated
-//! HIGH/MEDIUM confidence inline. The highest-risk pieces are the signal
-//! declaration/emission syntax and the exact crate version - if this
-//! doesn't compile, check those first against the current book.
+//! The gdext API here was researched from the godot-rust book, the gdext
+//! repo README, and docs.rs, then compiled for real by CI (the sandbox
+//! this was authored in cannot run cargo at all - Windows Application
+//! Control Policy, os error 4551 - so CI is the only compiler in the loop;
+//! see .github/workflows/ci.yml's advisory `godot-bindings` job).
+//!
+//! Confirmed by an actual build: `godot = "0.5.5"` resolves, and the
+//! `#[gdextension]`/`ExtensionLibrary`, `#[derive(GodotClass)]`,
+//! `#[class(init, base=Node)]`, `#[init(val = ...)]`, `#[godot_api]`,
+//! `#[func]` and `#[signal]` forms below all expand. One thing the
+//! research got wrong and the compiler caught: gdext's `dict!` macro takes
+//! `"key" => value`, not `"key": value`.
+//!
+//! Anything still unverified is flagged inline below.
 
 use std::cell::RefCell;
 
@@ -105,9 +111,9 @@ impl ProtocolCore {
                 self.character_id = Some(character_id);
                 self.flush_events();
                 dict! {
-                    "success": true,
-                    "character_id": character_id as i64,
-                    "error": "",
+                    "success" => true,
+                    "character_id" => character_id as i64,
+                    "error" => "",
                 }
             }
             Err(e) => err_dict(&e.to_string()),
@@ -135,10 +141,10 @@ impl ProtocolCore {
             Ok(move_result) => {
                 self.flush_events();
                 dict! {
-                    "success": true,
-                    "room_name": move_result.room_name,
-                    "room_description": move_result.room_description,
-                    "error": "",
+                    "success" => true,
+                    "room_name" => move_result.room_name,
+                    "room_description" => move_result.room_description,
+                    "error" => "",
                 }
             }
             Err(e) => err_dict(&e.to_string()),
@@ -161,13 +167,13 @@ impl ProtocolCore {
             Ok(info) => {
                 self.flush_events();
                 dict! {
-                    "success": true,
-                    "message": info.message,
-                    "damage": info.damage as i64,
-                    "target_name": info.target_name,
-                    "target_hp": info.target_hp as i64,
-                    "target_max_hp": info.target_max_hp as i64,
-                    "error": "",
+                    "success" => true,
+                    "message" => info.message,
+                    "damage" => info.damage as i64,
+                    "target_name" => info.target_name,
+                    "target_hp" => info.target_hp as i64,
+                    "target_max_hp" => info.target_max_hp as i64,
+                    "error" => "",
                 }
             }
             Err(e) => err_dict(&e.to_string()),
@@ -197,10 +203,10 @@ impl ProtocolCore {
         let mut npcs = VariantArray::new();
         for npc in &room.npcs {
             npcs.push(&dict! {
-                "id": npc.id as i64,
-                "name": npc.name.clone(),
-                "hp": npc.hp as i64,
-                "max_hp": npc.max_hp as i64,
+                "id" => npc.id as i64,
+                "name" => npc.name.clone(),
+                "hp" => npc.hp as i64,
+                "max_hp" => npc.max_hp as i64,
             }
             .to_variant());
         }
@@ -208,21 +214,21 @@ impl ProtocolCore {
         let mut players = VariantArray::new();
         for player in &room.players {
             players.push(&dict! {
-                "id": player.id as i64,
-                "name": player.name.clone(),
-                "level": player.level as i64,
+                "id" => player.id as i64,
+                "name" => player.name.clone(),
+                "level" => player.level as i64,
             }
             .to_variant());
         }
 
         dict! {
-            "success": true,
-            "room_name": room.name,
-            "room_description": room.description,
-            "exits": exits,
-            "npcs": npcs,
-            "players": players,
-            "error": "",
+            "success" => true,
+            "room_name" => room.name,
+            "room_description" => room.description,
+            "exits" => exits,
+            "npcs" => npcs,
+            "players" => players,
+            "error" => "",
         }
     }
 
@@ -241,18 +247,18 @@ impl ProtocolCore {
         let mut items = VariantArray::new();
         for item in &inventory.items {
             items.push(&dict! {
-                "item_id": item.item_id as i64,
-                "name": item.name.clone(),
-                "quantity": item.quantity as i64,
+                "item_id" => item.item_id as i64,
+                "name" => item.name.clone(),
+                "quantity" => item.quantity as i64,
             }
             .to_variant());
         }
 
         dict! {
-            "success": true,
-            "items": items,
-            "gold": inventory.gold as i64,
-            "error": "",
+            "success" => true,
+            "items" => items,
+            "gold" => inventory.gold as i64,
+            "error" => "",
         }
     }
 
@@ -293,8 +299,8 @@ const NO_CHARACTER: &str = "No character yet - call create_character first";
 
 fn err_dict(message: &str) -> Dictionary {
     dict! {
-        "success": false,
-        "error": message.to_string(),
+        "success" => false,
+        "error" => message.to_string(),
     }
 }
 
@@ -320,28 +326,28 @@ fn command_to_dict(command: &PresentationCommand) -> (&'static str, Dictionary) 
         } => (
             "SpawnEntity",
             dict! {
-                "entity_id": *entity_id as i64,
-                "kind": format!("{:?}", kind),
-                "room_id": *room_id as i64,
-                "display_name": display_name.clone(),
+                "entity_id" => *entity_id as i64,
+                "kind" => format!("{:?}", kind),
+                "room_id" => *room_id as i64,
+                "display_name" => display_name.clone(),
             },
         ),
         PresentationCommand::DespawnEntity { entity_id } => (
             "DespawnEntity",
-            dict! { "entity_id": *entity_id as i64 },
+            dict! { "entity_id" => *entity_id as i64 },
         ),
         PresentationCommand::EnterRoom { entity_id, room_id } => (
             "EnterRoom",
             dict! {
-                "entity_id": *entity_id as i64,
-                "room_id": *room_id as i64,
+                "entity_id" => *entity_id as i64,
+                "room_id" => *room_id as i64,
             },
         ),
         PresentationCommand::LeaveRoom { entity_id, room_id } => (
             "LeaveRoom",
             dict! {
-                "entity_id": *entity_id as i64,
-                "room_id": *room_id as i64,
+                "entity_id" => *entity_id as i64,
+                "room_id" => *room_id as i64,
             },
         ),
         PresentationCommand::UpdateProperty {
@@ -351,9 +357,9 @@ fn command_to_dict(command: &PresentationCommand) -> (&'static str, Dictionary) 
         } => (
             "UpdateProperty",
             dict! {
-                "entity_id": *entity_id as i64,
-                "key": key.clone(),
-                "value": property_to_variant(value),
+                "entity_id" => *entity_id as i64,
+                "key" => key.clone(),
+                "value" => property_to_variant(value),
             },
         ),
         PresentationCommand::PlayEffect {
@@ -368,11 +374,11 @@ fn command_to_dict(command: &PresentationCommand) -> (&'static str, Dictionary) 
             (
                 "PlayEffect",
                 dict! {
-                    "name": name.clone(),
+                    "name" => name.clone(),
                     // Godot has no null-int; -1 means "no entity", matching
                     // current_character_id()'s convention above.
-                    "entity_id": entity_id.map(|id| id as i64).unwrap_or(-1),
-                    "params": param_dict,
+                    "entity_id" => entity_id.map(|id| id as i64).unwrap_or(-1),
+                    "params" => param_dict,
                 },
             )
         }
@@ -382,8 +388,8 @@ fn command_to_dict(command: &PresentationCommand) -> (&'static str, Dictionary) 
         } => (
             "ShowMessage",
             dict! {
-                "text": text.clone(),
-                "target_entity_id": target_entity_id.map(|id| id as i64).unwrap_or(-1),
+                "text" => text.clone(),
+                "target_entity_id" => target_entity_id.map(|id| id as i64).unwrap_or(-1),
             },
         ),
     }
