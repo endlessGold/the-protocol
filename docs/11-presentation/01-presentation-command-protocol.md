@@ -117,39 +117,50 @@ Godot 클라이언트가 임베디드(FFI)로만 동작하는 게 아니라 **�
 
 **포맷 재사용**: 새 `MessageType`을 만들지 않고 기존 `MessageType::Event` +
 `Event { id, event_type, timestamp, source, payload, targets }`를 그대로
-썼다 — `payload`는 `Vec<PresentationCommand>`를 `rmp_serde`로 직렬화한
-바이트, `event_type = "presentation_batch"`로 태그. `protocol-protocol`이
+썼다 — `event_type = "presentation_batch"`로 태그. `protocol-protocol`이
 `protocol-presentation`을 몰라도 되게(불투명한 바이트로만 다룸) 하기 위한
-선택이다.
+선택이다. `payload` 자체의 포맷은 아래 §7.1 참고 — 현재는 `rmp_serde`가
+아니라 `serde_json`으로 직렬화한 `Vec<PresentationCommand>`다. `Event`를
+감싸는 바깥쪽 `Message`/`ProtocolCodec` 프레이밍은 여전히 MessagePack이고,
+바뀐 건 `payload` 안쪽 바이트뿐이다.
 
 **배선 지점**: `core/runtime/src/main.rs`의 `dispatch_events()` 헬퍼 —
-`Vec<DomainEvent>`를 받아 `translate_event()`로 펼치고, 직렬화해서
-`Event`로 감싸고, `SessionManager::broadcast()`로 보낸다. `MoveHandler`/
-`AttackHandler`/`CreateCharacterHandler`가 각자 `GameWorld` 호출 후
-`drain_events()` → `dispatch_events()` 순으로 부른다.
+`Vec<DomainEvent>`를 받아 `translate_event()`로 펼치고, 커맨드를 영향받는
+방(room) 단위로 묶어서(`affected_room()`), 방마다 `Event`로 감싸 그 방에
+있는 세션에게만 `SessionManager::send_to()`로 보낸다. `MoveHandler`/
+`AttackHandler`/`CreateCharacterHandler`가 각자 `GameWorld` 호출 후 락을
+쥔 채로 `drain_events()` → `dispatch_events()` 순으로 부르고, 그 다음에야
+락을 놓는다(방 조회에 `GameWorld`가 필요해서).
 
-**지금은 방(room) 단위로 타게팅 안 함 — 전체 브로드캐스트**: 어떤 세션이 어느
-방에 있는 플레이어인지(session_id → player_id → Character.room_id)를
-교차 조회하는 로직이 아직 없어서, 일단 연결된 모든 세션에 전부 보낸다.
-클라이언트가 자기 방과 무관한 갱신을 받아도 무시하면 되니 틀린 동작은
-아니지만, 최적은 아니다 — 후속 이슈로 등록.
+**방(room) 단위 타게팅 — 완료 (2026-08-28)**: 어떤 세션이 어느 방에 있는
+플레이어인지 교차 조회하기 위해 `SessionManager::session_ids()`를
+추가했다(세션 id를 나열할 방법이 전엔 없었음). `dispatch_events()`는 이제
+`session_id → player_id(get_player_id) → Character.room_id(GameWorld)`로
+각 세션의 현재 방을 구해서, `EnterRoom`/`LeaveRoom`/`SpawnEntity`는 커맨드가
+직접 들고 있는 `room_id`로, `DespawnEntity`/`UpdateProperty`/`PlayEffect`는
+`entity_id`로 방을 역조회해서(`entity_room()` — `Character`/`Npc`가
+entity_id 공간을 공유하므로 §6의 1000 기준으로 구분) 그 방에 있는 세션에만
+보낸다. 방을 못 구하면(예: `target_entity_id`가 없는 `ShowMessage`) 놓치는
+것보다 안전하므로 전체 브로드캐스트로 폴백하고 `tracing::debug!`로 남긴다.
 
-### 7.1 참고: 이 경로는 사실 gdext 없이도 갈 수 있다
+### 7.1 참고: 이 경로는 사실 gdext 없이도 갈 수 있다 — payload는 JSON으로 전환 완료
 
-§7의 배선(TCP + MessagePack `Event`)은 순수 GDScript TCP 클라이언트로도 받을
-수 있다 — `bindings/godot`(gdext FFI)가 없어도 멀티플레이어 접속 자체는
-가능하다는 뜻이다. 다만 **Godot 4 GDScript에는 MessagePack 코덱이 내장되어
-있지 않다** — 손으로 구현하려면(정수 크기별 태그, 문자열/배열/맵 인코딩 등)
-컴파일해서 검증할 방법 없이 짜기엔 꽤 위험한 분량이라, 이번 패스에서는
-시도하지 않았다. 대안은: (a) GDScript MessagePack 코덱을 직접 짜거나, (b) 이
-채널만 GDScript에 내장된 `JSON`으로 바꾸거나(다른 프로토콜 메시지는 그대로
-MessagePack 유지), (c) `bindings/godot`가 준비될 때까지 기다려서 역직렬화를
-러스트 쪽에서 끝내고 시그널만 던지게 하거나. 후속 이슈로 등록.
+§7의 배선(TCP + `Event`)은 순수 GDScript TCP 클라이언트로도 받을 수 있다 —
+`bindings/godot`(gdext FFI)가 없어도 멀티플레이어 접속 자체는 가능하다는
+뜻이다. 다만 **Godot 4 GDScript에는 MessagePack 코덱이 내장되어 있지 않다**
+— 아래에 있던 세 대안 중 (b)를 택해, `Event.payload`(`Vec<PresentationCommand>`)
+직렬화만 `rmp_serde`에서 `serde_json`으로 바꿨다(2026-08-28). 다른 프로토콜
+메시지(`Message`/`Event` 바깥 프레이밍, `Command`/`CommandResponse` 등)는
+여전히 `ProtocolCodec` + MessagePack 그대로다 — GDScript 쪽에 내장된 `JSON`
+클래스로 이 채널 하나만 그대로 파싱할 수 있게 하는 것이 목적. `bindings/godot`
+크레이트가 아직 없어서 실제 GDScript 파서로 검증은 못 했다 — 실물 클라이언트가
+붙을 때 확인 필요.
 
 ## 8. 참고 이슈
 
 - ~~엔티티 모델 통일 (Npc/Character)~~: the-protocol #26 — 완료 (§6)
 - ~~`GameWorld::start_combat()`이 `Combat::process_attack()`을 안 씀~~: the-protocol #27 — 완료 (§6)
 - `DomainEvent` 디스패처: the-protocol #28 — §6/§7로 대체 완료
-- 방(room) 단위 브로드캐스트 타게팅: 신규 등록 예정 (§7)
+- ~~방(room) 단위 브로드캐스트 타게팅~~: 완료 (§7, 2026-08-28)
+- ~~`presentation_batch` payload를 GDScript가 읽을 수 있게~~: 완료 (§7.1, 2026-08-28) — 단, 실제 GDScript 파서로는 아직 미검증
 - `bindings/godot` 크레이트: the-protocol #29 — 여전히 gdext API 실검증 대기 중

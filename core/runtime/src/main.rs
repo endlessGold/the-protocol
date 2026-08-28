@@ -406,19 +406,29 @@ fn resolve_character_id(
 
 /// Translate `DomainEvent`s produced by a `GameWorld` call into
 /// `PresentationCommand`s (see `protocol_presentation::translate_event`) and
-/// forward them to every connected session as a `protocol_protocol::Event`,
-/// so a networked client (a plain MUD client, or a future Godot client
-/// speaking this same protocol) can react to what just happened.
+/// forward them, as one or more `protocol_protocol::Event`s, only to the
+/// sessions whose player is actually in an affected room - so a networked
+/// client (a plain MUD client, or a future Godot client speaking this same
+/// protocol) reacts only to what happened around it.
 ///
-/// This broadcasts to *every* session rather than only the ones actually
-/// affected (e.g. players in the room something happened in) - proper
-/// room-scoped targeting needs session_id -> player_id -> Character.room_id
-/// cross-referencing that doesn't exist yet (session_manager.get_player_id()
-/// exists; there's no equivalent lookup from a session back to "what room is
-/// this player in" without also holding a GameWorld read lock here). Tracked
-/// as a follow-up; broadcasting everything is correct, just not scoped -
-/// clients receiving an update for a room they're not in can ignore it.
-fn dispatch_events(events: Vec<protocol_domain::DomainEvent>, session_manager: &SessionManager) {
+/// `game_world` must be the same `GameWorld` `events` was drained from -
+/// callers pass in the read/write guard they already hold (it derefs to
+/// `&GameWorld`) *before* dropping it, so the room lookups below see
+/// up-to-date state. See the `MoveHandler`/`AttackHandler`/
+/// `CreateCharacterHandler` call sites.
+///
+/// Commands are grouped by affected room and sent as one `Event` per
+/// (room, recipient set) rather than one `Event` per command, to avoid a
+/// flood of tiny messages. When a command's room can't be determined (see
+/// `affected_room`), it's broadcast to every session instead of being
+/// silently dropped - clients receiving an update for a room they're not in
+/// can ignore it, which is safer than a player missing a message meant for
+/// them.
+fn dispatch_events(
+    events: Vec<protocol_domain::DomainEvent>,
+    session_manager: &SessionManager,
+    game_world: &GameWorld,
+) {
     if events.is_empty() {
         return;
     }
@@ -432,24 +442,108 @@ fn dispatch_events(events: Vec<protocol_domain::DomainEvent>, session_manager: &
         return;
     }
 
-    let payload = match rmp_serde::to_vec(&commands) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            tracing::warn!("Failed to serialize presentation commands: {}", e);
-            return;
+    // Group commands by the room they affect (`None` = undetermined, falls
+    // back to a full broadcast) so we send one batch per recipient set
+    // instead of one message per command.
+    let mut by_room: std::collections::HashMap<Option<u32>, Vec<protocol_presentation::PresentationCommand>> =
+        std::collections::HashMap::new();
+    for command in commands {
+        let room_id = affected_room(&command, game_world);
+        by_room.entry(room_id).or_default().push(command);
+    }
+
+    // Resolve each active session's current room once, up front, so room
+    // groups below can just filter this list instead of re-querying
+    // session_manager/game_world per group.
+    let session_rooms: Vec<(u64, Option<u32>)> = session_manager
+        .session_ids()
+        .into_iter()
+        .map(|session_id| {
+            let room_id = session_manager
+                .get_player_id(session_id)
+                .and_then(|character_id| game_world.get_character(character_id))
+                .map(|character| character.room_id);
+            (session_id, room_id)
+        })
+        .collect();
+
+    for (room_id, batch) in by_room {
+        let batch_len = batch.len();
+        let payload = match serde_json::to_string(&batch) {
+            Ok(json) => json.into_bytes(),
+            Err(e) => {
+                tracing::warn!("Failed to serialize presentation commands: {}", e);
+                continue;
+            }
+        };
+
+        let event = Event {
+            id: rand::random(),
+            event_type: "presentation_batch".to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis() as u64,
+            source: "server".to_string(),
+            payload,
+            targets: None,
+        };
+        let message = Message::event(event);
+
+        match room_id {
+            None => {
+                tracing::debug!(
+                    "presentation_batch: could not determine an affected room for {} command(s); broadcasting to all sessions",
+                    batch_len
+                );
+                session_manager.broadcast(&message, None);
+            }
+            Some(room_id) => {
+                for (session_id, session_room) in &session_rooms {
+                    if *session_room == Some(room_id) {
+                        if let Err(e) = session_manager.send_to(*session_id, message.clone()) {
+                            tracing::debug!(
+                                "presentation_batch: failed to send to session {}: {}",
+                                session_id,
+                                e
+                            );
+                        }
+                    }
+                }
+            }
         }
-    };
+    }
+}
 
-    let event = Event {
-        id: rand::random(),
-        event_type: "presentation_batch".to_string(),
-        timestamp: chrono::Utc::now().timestamp_millis() as u64,
-        source: "server".to_string(),
-        payload,
-        targets: None,
-    };
+/// Which room (if any) a `PresentationCommand` affects, for targeting
+/// purposes. `EnterRoom`/`LeaveRoom`/`SpawnEntity` carry a `room_id`
+/// directly; everything else that only carries an `entity_id` is resolved
+/// via `entity_room`. `ShowMessage`'s `target_entity_id` is optional and
+/// `PlayEffect`'s `entity_id` is optional too - both fall back to `None`
+/// (broadcast) when absent, same as when the entity can't be found at all.
+fn affected_room(command: &protocol_presentation::PresentationCommand, game_world: &GameWorld) -> Option<u32> {
+    use protocol_presentation::PresentationCommand::*;
+    match command {
+        SpawnEntity { room_id, .. } => Some(*room_id),
+        EnterRoom { room_id, .. } => Some(*room_id),
+        LeaveRoom { room_id, .. } => Some(*room_id),
+        DespawnEntity { entity_id } => entity_room(*entity_id, game_world),
+        UpdateProperty { entity_id, .. } => entity_room(*entity_id, game_world),
+        PlayEffect { entity_id, .. } => entity_id.and_then(|id| entity_room(id, game_world)),
+        ShowMessage { target_entity_id, .. } => target_entity_id.and_then(|id| entity_room(id, game_world)),
+    }
+}
 
-    session_manager.broadcast(&Message::event(event), None);
+/// Resolve a presentation `entity_id` back to the room it's currently in.
+/// `Character` and `Npc` share one `entity_id` space (see the id-space
+/// comment on `application::GameWorld::new()`): NPCs are the small
+/// statically-defined 1-4 range from `World::initialize()`, and character
+/// ids start at 1000. This threshold is the same pragmatic reservation
+/// that comment describes, not a real type tag - if NPCs ever get created
+/// dynamically this needs a proper discriminated id instead.
+fn entity_room(entity_id: u64, game_world: &GameWorld) -> Option<u32> {
+    if entity_id >= 1000 {
+        game_world.get_character(entity_id).map(|c| c.room_id)
+    } else {
+        game_world.get_world().get_npc(entity_id).map(|npc| npc.room_id)
+    }
 }
 
 struct LookHandler {
@@ -524,8 +618,12 @@ impl protocol_routing::CommandHandler for MoveHandler {
         let mut world = self.game_world.write().await;
         let move_result = world.move_character(character_id, domain_dir);
         let events = world.drain_events();
+        // Look up affected rooms/sessions while still holding the write
+        // guard (it derefs to `&GameWorld`) - dropping first would leave
+        // dispatch_events with nothing to resolve entity/session rooms
+        // against.
+        dispatch_events(events, &self.session_manager, &world);
         drop(world);
-        dispatch_events(events, &self.session_manager);
 
         match move_result {
             Ok(result) => {
@@ -580,8 +678,10 @@ impl protocol_routing::CommandHandler for AttackHandler {
         let mut world = self.game_world.write().await;
         let combat_result = world.start_combat(character_id, &target_name);
         let events = world.drain_events();
+        // See MoveHandler above: look up rooms while still holding the
+        // write guard, then drop.
+        dispatch_events(events, &self.session_manager, &world);
         drop(world);
-        dispatch_events(events, &self.session_manager);
 
         match combat_result {
             Ok(combat_info) => {
@@ -678,8 +778,15 @@ impl protocol_routing::CommandHandler for CreateCharacterHandler {
                 world.add_character(character);
 
                 let events = world.drain_events();
+                // See MoveHandler above: look up rooms while still holding
+                // the write guard, then drop. Note this runs before
+                // set_player below, so the just-created character's own
+                // session isn't bound to it yet and won't be counted as
+                // "in room 1" for this dispatch - same ordering as before,
+                // just now room-scoped; the client already learns its own
+                // character_id from the CreateCharacterResponse below.
+                dispatch_events(events, &self.session_manager, &world);
                 drop(world);
-                dispatch_events(events, &self.session_manager);
 
                 // Bind this session to the character it just created, so
                 // subsequent look/move/attack/inventory commands from this

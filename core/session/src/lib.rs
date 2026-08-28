@@ -118,6 +118,16 @@ impl SessionManager {
         self.address_sessions.get(addr).map(|id| *id)
     }
 
+    /// Enumerate the ids of every currently active session. `sessions` is
+    /// private and otherwise only exposed through `get`/`remove`/
+    /// `broadcast`/`send_to`, none of which let a caller discover *which*
+    /// sessions exist - this is for callers that need to decide, per
+    /// session, whether to send something (e.g. room-scoped event
+    /// targeting in `dispatch_events`, see core/runtime/src/main.rs).
+    pub fn session_ids(&self) -> Vec<u64> {
+        self.sessions.iter().map(|entry| *entry.key()).collect()
+    }
+
     pub fn remove(&self, session_id: u64) -> Option<Session> {
         if let Some(session) = self.sessions.remove(&session_id).map(|(_, s)| s) {
             self.address_sessions.remove(&session.address);
