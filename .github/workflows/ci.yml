@@ -187,7 +187,7 @@ jobs:
           # hand-rolled MessagePack against a real server. The Rust-side
           # contract tests pin the expected bytes; this proves the GDScript
           # actually produces them and can parse the replies.
-          ./target/release/runtime server --bind 127.0.0.1:7770 > server.log 2>&1 &
+          RUST_LOG=info ./target/release/runtime server --bind 127.0.0.1:7770 > server.log 2>&1 &
           server_pid=$!
           trap 'kill $server_pid 2>/dev/null || true' EXIT
 

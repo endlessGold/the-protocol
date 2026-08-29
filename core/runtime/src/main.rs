@@ -467,6 +467,13 @@ fn dispatch_events(
         })
         .collect();
 
+    tracing::info!(
+        "dispatch_events: {} command(s) in {} room group(s); sessions: {:?}",
+        by_room.values().map(|v| v.len()).sum::<usize>(),
+        by_room.len(),
+        session_rooms
+    );
+
     for (room_id, batch) in by_room {
         let batch_len = batch.len();
         let payload = match serde_json::to_string(&batch) {
@@ -496,17 +503,25 @@ fn dispatch_events(
                 session_manager.broadcast(&message, None);
             }
             Some(room_id) => {
+                let mut sent = 0usize;
                 for (session_id, session_room) in &session_rooms {
                     if *session_room == Some(room_id) {
-                        if let Err(e) = session_manager.send_to(*session_id, message.clone()) {
-                            tracing::debug!(
+                        match session_manager.send_to(*session_id, message.clone()) {
+                            Ok(()) => sent += 1,
+                            Err(e) => tracing::warn!(
                                 "presentation_batch: failed to send to session {}: {}",
                                 session_id,
                                 e
-                            );
+                            ),
                         }
                     }
                 }
+                tracing::info!(
+                    "presentation_batch: {} command(s) for room {} -> {} session(s)",
+                    batch_len,
+                    room_id,
+                    sent
+                );
             }
         }
     }
