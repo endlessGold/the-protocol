@@ -73,6 +73,35 @@ jobs:
           path: bindings/godot/target/release/libprotocol_godot.so
           if-no-files-found: error
 
+  godot-bindings-windows:
+    name: cargo build (bindings/godot, windows)
+    runs-on: windows-latest
+    # The Linux .so is what CI's integration job runs against; this exists
+    # so the extension can also be picked up and used from a Windows Godot
+    # editor without needing a local Rust toolchain. Same source, so a
+    # break here is almost always platform-specific (path handling, linking)
+    # rather than a logic error.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "bindings/godot -> target"
+
+      - name: cargo build --release
+        run: cargo build --release --manifest-path bindings/godot/Cargo.toml
+
+      - name: Upload dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-godot-windows
+          path: bindings/godot/target/release/protocol_godot.dll
+          if-no-files-found: error
+
   godot-integration:
     name: Godot headless integration
     runs-on: ubuntu-latest
