@@ -1,0 +1,58 @@
+name: Format
+
+# Manually-triggered helper: runs `cargo fmt --all` and commits the result.
+#
+# Exists because the main dev sandbox for this project cannot execute cargo
+# at all (Windows Application Control Policy, os error 4551), so rustfmt
+# can't be run locally - and the workspace had never been formatted, which
+# left `fmt --check` permanently red and meant clippy never even got to run.
+#
+# Run from the Actions tab ("Format" -> "Run workflow"). Normally you should
+# never need this: format locally if you can. It's here so an environment
+# without a working toolchain can still keep the tree formatted.
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_bindings:
+        description: "Also format bindings/godot (excluded from the workspace)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    name: cargo fmt --all
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: cargo fmt --all
+        run: cargo fmt --all
+
+      - name: cargo fmt (bindings/godot)
+        if: ${{ inputs.include_bindings }}
+        # Not a workspace member, so `--all` above misses it.
+        run: cargo fmt --manifest-path bindings/godot/Cargo.toml --all
+
+      - name: Commit
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "Already formatted - nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "style: cargo fmt --all
+
+          Applied by the Format workflow. No behavior change."
+          git push
