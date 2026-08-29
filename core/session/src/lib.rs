@@ -1,6 +1,5 @@
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
