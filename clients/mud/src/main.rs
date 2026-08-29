@@ -3,7 +3,6 @@ use bytes::{BufMut, BytesMut};
 use clap::Parser;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
-use protocol_observability;
 use protocol_protocol::*;
 
 #[derive(Parser)]
@@ -21,7 +20,7 @@ async fn main() -> Result<()> {
     tracing::info!("Connecting to {}...", cli.server);
 
     use tokio::net::TcpStream;
-    let mut stream = TcpStream::connect(&cli.server).await?;
+    let stream = TcpStream::connect(&cli.server).await?;
     stream.set_nodelay(true)?;
 
     let (mut reader, mut writer) = stream.into_split();
