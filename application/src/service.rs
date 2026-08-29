@@ -235,7 +235,7 @@ impl GameWorld {
         let target_npc_id = self
             .world
             .find_npc_in_room(attacker_room_id, target_name)
-            .ok_or_else(|| ApplicationError::NpcNotFound(0))?
+            .ok_or(ApplicationError::NpcNotFound(0))?
             .id;
 
         let combat_id = self.next_combat_id;
@@ -282,22 +282,13 @@ impl GameWorld {
         self.characters.get(&character_id).map(|c| &c.inventory)
     }
 
-    /// Create an NPC at runtime and place it in `room_id`.
+    /// Create an NPC at runtime and place it in `spec.room_id`.
     ///
     /// Stats are the same shape the seeded NPCs in `World::initialize()`
     /// carry, so a spawned NPC is a first-class `Combatant` - it can be
     /// attacked, take damage, and award XP exactly like the fixed ones.
-    pub fn spawn_npc(
-        &mut self,
-        name: String,
-        description: String,
-        room_id: u32,
-        level: u32,
-        hp: u32,
-        attack: u32,
-        defense: u32,
-    ) -> Result<u64, ApplicationError> {
-        if self.world.get_room(room_id).is_none() {
+    pub fn spawn_npc(&mut self, spec: NpcSpawnSpec) -> Result<u64, ApplicationError> {
+        if self.world.get_room(spec.room_id).is_none() {
             return Err(ApplicationError::NoExit);
         }
 
@@ -306,21 +297,26 @@ impl GameWorld {
 
         self.world.add_npc(Npc {
             id: npc_id,
-            name: name.clone(),
-            description,
-            room_id,
-            hp,
-            max_hp: hp,
-            level,
-            attack,
-            defense,
+            name: spec.name.clone(),
+            description: spec.description,
+            room_id: spec.room_id,
+            hp: spec.hp,
+            max_hp: spec.hp,
+            level: spec.level,
+            attack: spec.attack,
+            defense: spec.defense,
         });
 
-        tracing::info!("Spawned NPC: {} ({}) in room {}", name, npc_id, room_id);
+        tracing::info!(
+            "Spawned NPC: {} ({}) in room {}",
+            spec.name,
+            npc_id,
+            spec.room_id
+        );
         self.pending_events.push(DomainEvent::NpcSpawned {
             npc_id,
-            name,
-            room_id,
+            name: spec.name,
+            room_id: spec.room_id,
         });
 
         Ok(npc_id)
@@ -429,4 +425,21 @@ pub struct CombatInfo {
     pub target_name: String,
     pub target_hp: u32,
     pub target_max_hp: u32,
+}
+
+/// Everything needed to create an NPC at runtime.
+///
+/// A struct rather than positional parameters because the alternative was
+/// eight arguments, five of them integers - `spawn_npc(name, desc, 1, 3,
+/// 40, 7, 3)` gives a reader no way to tell level from hp from attack.
+#[derive(Debug, Clone)]
+pub struct NpcSpawnSpec {
+    pub name: String,
+    pub description: String,
+    pub room_id: u32,
+    pub level: u32,
+    /// Starting HP, also used as max_hp.
+    pub hp: u32,
+    pub attack: u32,
+    pub defense: u32,
 }

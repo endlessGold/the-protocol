@@ -35,7 +35,7 @@ use std::cell::RefCell;
 
 use godot::prelude::*;
 
-use protocol_application::GameWorld;
+use protocol_application::{GameWorld, NpcSpawnSpec};
 use protocol_domain::Direction;
 use protocol_presentation::{translate_event, PresentationCommand, PropertyValue};
 
@@ -283,15 +283,15 @@ impl ProtocolCore {
     ) -> VarDictionary {
         let result = {
             let mut world = self.world.borrow_mut();
-            world.spawn_npc(
-                npc_name.to_string(),
-                description.to_string(),
-                room_id as u32,
-                level.max(1) as u32,
-                hp.max(1) as u32,
-                attack.max(0) as u32,
-                defense.max(0) as u32,
-            )
+            world.spawn_npc(NpcSpawnSpec {
+                name: npc_name.to_string(),
+                description: description.to_string(),
+                room_id: room_id as u32,
+                level: level.max(1) as u32,
+                hp: hp.max(1) as u32,
+                attack: attack.max(0) as u32,
+                defense: defense.max(0) as u32,
+            })
         };
 
         match result {

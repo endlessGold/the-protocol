@@ -1,9 +1,21 @@
+//! Task scheduler.
+//!
+//! **This crate is currently inert.** `Scheduler::new()` has no callers
+//! anywhere in the workspace, and `tick()` only does bookkeeping - it never
+//! polls or spawns the `BoxFuture` it stores, so a scheduled task would
+//! never actually run even if something did drive it.
+//!
+//! Anything that needs real periodic work today should use `tokio::spawn`
+//! with `tokio::time::interval` directly rather than building on this. It's
+//! kept because the shape is a reasonable starting point if a real
+//! scheduler is wanted later, but treat it as unimplemented, not as
+//! infrastructure.
+
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
 use thiserror::Error;
-use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 #[derive(Debug, Error)]
@@ -28,18 +40,13 @@ pub struct ScheduledTask {
 pub struct Scheduler {
     tasks: Vec<ScheduledTask>,
     next_id: u64,
-    tx: mpsc::Sender<u64>,
-    rx: mpsc::Receiver<u64>,
 }
 
 impl Scheduler {
     pub fn new() -> Self {
-        let (tx, rx) = mpsc::channel(256);
         Self {
             tasks: Vec::new(),
             next_id: 1,
-            tx,
-            rx,
         }
     }
 
@@ -99,13 +106,19 @@ impl Scheduler {
             }
         }
 
-        // Execute ready tasks (in production, spawn them)
+        // NOTE: this only does the bookkeeping - it removes one-shot tasks
+        // and reschedules interval ones. It does NOT execute `task.task`;
+        // nothing polls or spawns those futures, and `Scheduler` has no
+        // callers anywhere in the workspace. See the crate docs.
         for i in ready.into_iter().rev() {
-            if let Some(task) = self.tasks.get_mut(i) {
-                if task.interval.is_none() {
+            match self.tasks.get_mut(i).and_then(|task| task.interval) {
+                Some(interval) => {
+                    if let Some(task) = self.tasks.get_mut(i) {
+                        task.execute_at = Instant::now() + interval;
+                    }
+                }
+                None => {
                     self.tasks.remove(i);
-                } else {
-                    task.execute_at = Instant::now() + task.interval.unwrap();
                 }
             }
         }
