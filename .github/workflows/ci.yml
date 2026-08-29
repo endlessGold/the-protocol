@@ -251,10 +251,12 @@ jobs:
   fmt-and-clippy:
     name: cargo fmt --check & clippy
     runs-on: ubuntu-latest
-    # Advisory only for now - this codebase has known style/warning debt
-    # (see docs/00-status/known-issues.md #20) that isn't this workflow's
-    # job to block on; it's here so warnings are visible without failing CI.
-    continue-on-error: true
+    # Blocking as of the commit that first formatted the workspace. It was
+    # advisory before that because the tree had never been run through
+    # rustfmt, so this job failed on every push - which also meant clippy,
+    # which runs after it, had literally never executed. Use the Format
+    # workflow (.github/workflows/format.yml) if you can't run rustfmt
+    # locally.
     steps:
       - uses: actions/checkout@v4
 
