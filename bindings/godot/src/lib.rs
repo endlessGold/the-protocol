@@ -268,6 +268,99 @@ impl ProtocolCore {
         }
     }
 
+    /// Spawn an NPC at runtime in `room_id`.
+    /// Returns `{success, npc_id, error}`.
+    #[func]
+    fn spawn_npc(
+        &mut self,
+        npc_name: GString,
+        description: GString,
+        room_id: i64,
+        level: i64,
+        hp: i64,
+        attack: i64,
+        defense: i64,
+    ) -> VarDictionary {
+        let result = {
+            let mut world = self.world.borrow_mut();
+            world.spawn_npc(
+                npc_name.to_string(),
+                description.to_string(),
+                room_id as u32,
+                level.max(1) as u32,
+                hp.max(1) as u32,
+                attack.max(0) as u32,
+                defense.max(0) as u32,
+            )
+        };
+
+        match result {
+            Ok(npc_id) => {
+                self.flush_events();
+                dict! {
+                    "success" => true,
+                    "npc_id" => npc_id as i64,
+                    "error" => "",
+                }
+            }
+            Err(e) => err_dict(&e.to_string()),
+        }
+    }
+
+    /// Move an NPC one room in `direction`.
+    /// Returns `{success, room_id, error}`.
+    #[func]
+    fn move_npc(&mut self, npc_id: i64, direction: GString) -> VarDictionary {
+        let Some(dir) = Direction::from_str(&direction.to_string()) else {
+            return err_dict(&format!("Unknown direction: {}", direction));
+        };
+
+        let result = {
+            let mut world = self.world.borrow_mut();
+            world.move_npc(npc_id as u64, dir)
+        };
+
+        match result {
+            Ok(room_id) => {
+                self.flush_events();
+                dict! {
+                    "success" => true,
+                    "room_id" => room_id as i64,
+                    "error" => "",
+                }
+            }
+            Err(e) => err_dict(&e.to_string()),
+        }
+    }
+
+    /// Remove an NPC from the world.
+    #[func]
+    fn despawn_npc(&mut self, npc_id: i64) -> VarDictionary {
+        let result = {
+            let mut world = self.world.borrow_mut();
+            world.despawn_npc(npc_id as u64)
+        };
+
+        match result {
+            Ok(()) => {
+                self.flush_events();
+                dict! { "success" => true, "error" => "" }
+            }
+            Err(e) => err_dict(&e.to_string()),
+        }
+    }
+
+    /// Directions an NPC can currently move, as lowercase strings.
+    #[func]
+    fn npc_exits(&self, npc_id: i64) -> VarArray {
+        let world = self.world.borrow();
+        let mut out = VarArray::new();
+        for exit in world.npc_exits(npc_id as u64) {
+            out.push(&exit.to_variant());
+        }
+        out
+    }
+
     /// The character id this client is bound to, or -1 if
     /// `create_character` hasn't been called yet.
     #[func]

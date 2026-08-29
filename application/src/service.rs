@@ -41,7 +41,11 @@ pub struct GameWorld {
     characters: HashMap<u64, Character>,
     world: World,
     combats: HashMap<u64, Combat>,
-    next_character_id: u64,
+    /// One allocator for every runtime-created entity - characters AND
+    /// dynamically spawned NPCs. They share a single u64 id space because
+    /// the presentation layer addresses both as `entity_id`
+    /// (see core/presentation), so an id must identify exactly one thing.
+    next_entity_id: u64,
     next_combat_id: u64,
     /// Domain events produced by the last batch of GameWorld operations,
     /// waiting to be drained by the caller (e.g. a command handler, which
@@ -57,16 +61,10 @@ impl GameWorld {
             characters: HashMap::new(),
             world: World::new(),
             combats: HashMap::new(),
-            // NPCs are statically defined in World::initialize() with small
-            // hardcoded ids (currently 1-4). Characters and NPCs share one
-            // u64 entity_id space as far as the presentation layer is
-            // concerned (see core/presentation's PresentationCommand), so
-            // starting character ids well above the NPC range avoids an id
-            // collision between e.g. Character #1 and the Town Guard NPC
-            // #1. This is a pragmatic reservation, not a real shared
-            // allocator - if NPCs ever get created dynamically at runtime,
-            // this needs a proper shared id source instead.
-            next_character_id: 1000,
+            // Starts above the fixed ids World::initialize() hardcodes for
+            // its seeded NPCs (currently 1-4), so those can never collide
+            // with anything allocated here.
+            next_entity_id: 1000,
             next_combat_id: 1,
             pending_events: Vec::new(),
         }
@@ -90,8 +88,8 @@ impl GameWorld {
         }
 
         let mut character = Character::new(name, class);
-        character.id = self.next_character_id;
-        self.next_character_id += 1;
+        character.id = self.next_entity_id;
+        self.next_entity_id += 1;
 
         // Place in starting room
         character.room_id = 1;
@@ -253,6 +251,106 @@ impl GameWorld {
 
     pub fn get_inventory(&self, character_id: u64) -> Option<&Inventory> {
         self.characters.get(&character_id).map(|c| &c.inventory)
+    }
+
+    /// Create an NPC at runtime and place it in `room_id`.
+    ///
+    /// Stats are the same shape the seeded NPCs in `World::initialize()`
+    /// carry, so a spawned NPC is a first-class `Combatant` - it can be
+    /// attacked, take damage, and award XP exactly like the fixed ones.
+    pub fn spawn_npc(
+        &mut self,
+        name: String,
+        description: String,
+        room_id: u32,
+        level: u32,
+        hp: u32,
+        attack: u32,
+        defense: u32,
+    ) -> Result<u64, ApplicationError> {
+        if self.world.get_room(room_id).is_none() {
+            return Err(ApplicationError::NoExit);
+        }
+
+        let npc_id = self.next_entity_id;
+        self.next_entity_id += 1;
+
+        self.world.add_npc(Npc {
+            id: npc_id,
+            name: name.clone(),
+            description,
+            room_id,
+            hp,
+            max_hp: hp,
+            level,
+            attack,
+            defense,
+        });
+
+        tracing::info!("Spawned NPC: {} ({}) in room {}", name, npc_id, room_id);
+        self.pending_events.push(DomainEvent::NpcSpawned {
+            npc_id,
+            name,
+            room_id,
+        });
+
+        Ok(npc_id)
+    }
+
+    /// Move an NPC one room in `direction`, if that exit exists.
+    pub fn move_npc(
+        &mut self,
+        npc_id: u64,
+        direction: Direction,
+    ) -> Result<u32, ApplicationError> {
+        let from_room_id = self
+            .world
+            .get_npc(npc_id)
+            .ok_or(ApplicationError::NpcNotFound(npc_id))?
+            .room_id;
+
+        let to_room_id = *self
+            .world
+            .get_room(from_room_id)
+            .ok_or(ApplicationError::NoExit)?
+            .exits
+            .get(&direction)
+            .ok_or(ApplicationError::NoExit)?;
+
+        self.world
+            .move_npc(npc_id, to_room_id)
+            .ok_or(ApplicationError::NpcNotFound(npc_id))?;
+
+        self.pending_events.push(DomainEvent::NpcMoved {
+            npc_id,
+            from_room_id,
+            to_room_id,
+        });
+
+        Ok(to_room_id)
+    }
+
+    /// Remove an NPC from the world.
+    pub fn despawn_npc(&mut self, npc_id: u64) -> Result<(), ApplicationError> {
+        let room_id = self
+            .world
+            .remove_npc(npc_id)
+            .ok_or(ApplicationError::NpcNotFound(npc_id))?;
+        self.pending_events
+            .push(DomainEvent::NpcDespawned { npc_id, room_id });
+        Ok(())
+    }
+
+    /// Directions an NPC can currently move, as lowercase strings.
+    pub fn npc_exits(&self, npc_id: u64) -> Vec<String> {
+        let Some(npc) = self.world.get_npc(npc_id) else {
+            return Vec::new();
+        };
+        self.world
+            .exits_from(npc.room_id)
+            .into_iter()
+            .map(|(d, _)| format!("{:?}", d).to_lowercase())
+            .collect()
     }
 
     pub fn get_world(&self) -> &World {

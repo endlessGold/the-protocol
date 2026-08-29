@@ -44,4 +44,22 @@ pub enum DomainEvent {
         item_id: u32,
         quantity: u32,
     },
+
+    /// An NPC came into existence at runtime (as opposed to the fixed set
+    /// `World::initialize()` seeds). Carries `room_id` because, unlike
+    /// `CharacterCreated`, NPCs are not all born in room 1.
+    NpcSpawned {
+        npc_id: u64,
+        name: String,
+        room_id: u32,
+    },
+    NpcMoved {
+        npc_id: u64,
+        from_room_id: u32,
+        to_room_id: u32,
+    },
+    NpcDespawned {
+        npc_id: u64,
+        room_id: u32,
+    },
 }

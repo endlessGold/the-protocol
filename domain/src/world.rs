@@ -273,3 +273,64 @@ impl Default for World {
         Self::new()
     }
 }
+
+impl World {
+
+    /// Insert an NPC and register it in its room.
+    ///
+    /// `Npc::room_id` and `Room::npc_ids` are two representations of the
+    /// same fact, and `look_room()` reads the latter - so anything that
+    /// changes where an NPC is must update both. That's why callers go
+    /// through these methods rather than touching `npcs` directly.
+    pub fn add_npc(&mut self, npc: Npc) {
+        if let Some(room) = self.rooms.get_mut(&npc.room_id) {
+            if !room.npc_ids.contains(&npc.id) {
+                room.npc_ids.push(npc.id);
+            }
+        }
+        self.npcs.insert(npc.id, npc);
+    }
+
+    /// Move an NPC to another room, keeping both representations in sync.
+    /// Returns the room it came from, or `None` if the NPC or the
+    /// destination doesn't exist (in which case nothing is changed).
+    pub fn move_npc(&mut self, npc_id: u64, to_room_id: u32) -> Option<u32> {
+        if !self.rooms.contains_key(&to_room_id) {
+            return None;
+        }
+        let from_room_id = self.npcs.get(&npc_id)?.room_id;
+        if from_room_id == to_room_id {
+            return Some(from_room_id);
+        }
+
+        if let Some(room) = self.rooms.get_mut(&from_room_id) {
+            room.npc_ids.retain(|id| *id != npc_id);
+        }
+        if let Some(room) = self.rooms.get_mut(&to_room_id) {
+            if !room.npc_ids.contains(&npc_id) {
+                room.npc_ids.push(npc_id);
+            }
+        }
+        if let Some(npc) = self.npcs.get_mut(&npc_id) {
+            npc.room_id = to_room_id;
+        }
+        Some(from_room_id)
+    }
+
+    /// Remove an NPC entirely. Returns the room it was in.
+    pub fn remove_npc(&mut self, npc_id: u64) -> Option<u32> {
+        let npc = self.npcs.remove(&npc_id)?;
+        if let Some(room) = self.rooms.get_mut(&npc.room_id) {
+            room.npc_ids.retain(|id| *id != npc_id);
+        }
+        Some(npc.room_id)
+    }
+
+    /// Where an NPC could go from its current room, as (direction, room_id).
+    pub fn exits_from(&self, room_id: u32) -> Vec<(Direction, u32)> {
+        self.rooms
+            .get(&room_id)
+            .map(|room| room.exits.iter().map(|(d, r)| (*d, *r)).collect())
+            .unwrap_or_default()
+    }
+}

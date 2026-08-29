@@ -240,6 +240,31 @@ pub fn translate_event(event: &DomainEvent) -> Vec<PresentationCommand> {
         // No player-visible presentation beyond what AttackExecuted's
         // PlayEffect already implies. Left unmapped rather than guessing.
         DomainEvent::CombatStarted { .. } => vec![],
+
+        DomainEvent::NpcSpawned { npc_id, name, room_id } => vec![PresentationCommand::SpawnEntity {
+            entity_id: *npc_id,
+            kind: EntityKind::Npc,
+            room_id: *room_id,
+            display_name: name.clone(),
+        }],
+
+        // Both halves are emitted so a client can update the room it's
+        // leaving as well as the one it's entering - the two rooms have
+        // different audiences once dispatch is room-scoped.
+        DomainEvent::NpcMoved { npc_id, from_room_id, to_room_id } => vec![
+            PresentationCommand::LeaveRoom {
+                entity_id: *npc_id,
+                room_id: *from_room_id,
+            },
+            PresentationCommand::EnterRoom {
+                entity_id: *npc_id,
+                room_id: *to_room_id,
+            },
+        ],
+
+        DomainEvent::NpcDespawned { npc_id, .. } => vec![PresentationCommand::DespawnEntity {
+            entity_id: *npc_id,
+        }],
     }
 }
 
