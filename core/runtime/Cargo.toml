@@ -19,7 +19,6 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
-bytes.workspace = true
 chrono.workspace = true
 rand.workspace = true
 
@@ -34,3 +33,4 @@ protocol-observability = { path = "../observability" }
 protocol-domain = { path = "../../domain" }
 protocol-application = { path = "../../application" }
 protocol-presentation = { path = "../presentation" }
+protocol-client = { path = "../../clients/common" }

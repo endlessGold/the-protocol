@@ -13,6 +13,7 @@ members = [
     "core/presentation",
     "domain",
     "application",
+    "clients/common",
     "clients/mud",
     "tools/wat2wasm",
 ]

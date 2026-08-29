@@ -1,9 +1,16 @@
-use anyhow::Result;
-use bytes::{BufMut, BytesMut};
-use clap::Parser;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+//! Terminal MUD client.
+//!
+//! All the protocol work lives in `protocol-client`; this is just a REPL.
+//! `core/runtime`'s `run_client()` is the same program behind a subcommand
+//! and shares the same library.
 
-use protocol_protocol::*;
+use anyhow::Result;
+use clap::Parser;
+use protocol_client::{args, describe, Connection, Pushed};
+use protocol_protocol::{
+    AttackResponse, CommandResponse, Direction, InventoryResponse, LookResponse, MoveResponse,
+};
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 #[derive(Parser)]
 #[command(name = "mud", about = "The Protocol - MUD Client")]
@@ -15,201 +22,173 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     protocol_observability::init_logging();
-
     let cli = Cli::parse();
-    tracing::info!("Connecting to {}...", cli.server);
+    run(&cli.server).await
+}
 
-    use tokio::net::TcpStream;
-    let stream = TcpStream::connect(&cli.server).await?;
-    stream.set_nodelay(true)?;
+async fn run(server: &str) -> Result<()> {
+    tracing::info!("Connecting to {}...", server);
+    let mut conn = Connection::connect(server).await?;
+    println!("Connected. Session: {}", conn.session_id());
+    println!("Type 'help' for available commands.");
 
-    let (mut reader, mut writer) = stream.into_split();
-    let codec = ProtocolCodec::new();
-
-    // Handshake
-    let hello = Message::hello(ClientType::MUD, None);
-    writer.write_all(&codec.encode(&hello)?).await?;
-
-    let mut len_buf = [0u8; 4];
-    reader.read_exact(&mut len_buf).await?;
-    let total_len = u32::from_be_bytes(len_buf) as usize;
-    let mut frame = vec![0u8; total_len - 4];
-    reader.read_exact(&mut frame).await?;
-
-    let mut full_frame = BytesMut::with_capacity(4 + total_len);
-    full_frame.put_slice(&len_buf);
-    full_frame.put_slice(&frame);
-
-    let mut buf = full_frame;
-    let ack =
-        ProtocolCodec::decode_simple(&mut buf)?.ok_or_else(|| anyhow::anyhow!("No response"))?;
-
-    match ack.message_type {
-        MessageType::HelloAck => {
-            let hello_ack: HelloAck = rmp_serde::from_slice(&ack.payload)?;
-            println!("Connected! Session: {}", hello_ack.session_id);
-        }
-        _ => return Err(anyhow::anyhow!("Handshake failed")),
-    }
-
-    println!("Type 'help' for commands.\n");
-
-    let stdin = tokio::io::stdin();
-    let mut input_reader = tokio::io::BufReader::new(stdin);
-    let mut input = String::new();
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
 
     loop {
-        input.clear();
         print!("> ");
         use std::io::Write;
         std::io::stdout().flush()?;
 
-        let bytes_read = input_reader.read_line(&mut input).await?;
-        if bytes_read == 0 {
-            break;
-        }
-
-        let input = input.trim();
-        if input.is_empty() {
+        let Some(line) = lines.next_line().await? else {
+            break; // EOF
+        };
+        let line = line.trim();
+        if line.is_empty() {
             continue;
         }
 
-        let parts: Vec<&str> = input.splitn(2, ' ').collect();
-        let cmd = parts[0].to_lowercase();
+        let mut parts = line.splitn(2, ' ');
+        let verb = parts.next().unwrap_or("").to_lowercase();
+        let rest = parts.next().unwrap_or("").trim();
 
-        let message = match cmd.as_str() {
+        let (command, payload) = match verb.as_str() {
             "quit" | "exit" => {
                 println!("Goodbye!");
                 break;
             }
             "help" => {
-                println!("Commands: look, move <dir>, attack <target>, inventory, create <name> <class>, quit");
+                print_help();
                 continue;
             }
-            "look" => Message::command(Command {
-                id: rand::random(),
-                command_type: "look".to_string(),
-                session_id: 0,
-                timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                payload: vec![],
-            }),
-            "move" => {
-                let dir = parts.get(1).unwrap_or(&"north");
-                let move_cmd = MoveCommand {
-                    direction: Direction::from_str(dir).unwrap_or(Direction::North),
+            "look" | "l" => ("look", args::none()),
+            "inventory" | "inv" | "i" => ("inventory", args::none()),
+            "move" | "go" | "m" => {
+                let Some(direction) = Direction::from_str(rest) else {
+                    println!("Go where? (north/south/east/west/up/down)");
+                    continue;
                 };
-                Message::command(Command {
-                    id: rand::random(),
-                    command_type: "move".to_string(),
-                    session_id: 0,
-                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                    payload: rmp_serde::to_vec(&move_cmd)?,
-                })
+                ("move", args::movement(direction)?)
             }
-            "attack" => {
-                let target = parts.get(1).unwrap_or(&"goblin");
-                Message::command(Command {
-                    id: rand::random(),
-                    command_type: "attack".to_string(),
-                    session_id: 0,
-                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                    payload: target.as_bytes().to_vec(),
-                })
+            "attack" | "a" => {
+                if rest.is_empty() {
+                    println!("Attack what?");
+                    continue;
+                }
+                ("attack", args::attack(rest))
             }
-            "inventory" => Message::command(Command {
-                id: rand::random(),
-                command_type: "inventory".to_string(),
-                session_id: 0,
-                timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                payload: vec![],
-            }),
             "create" => {
-                let name = parts.get(1).unwrap_or(&"Hero").to_string();
-                let class = parts.get(2).unwrap_or(&"warrior").to_string();
-                let create_cmd = CreateCharacterCommand { name, class };
-                Message::command(Command {
-                    id: rand::random(),
-                    command_type: "create_character".to_string(),
-                    session_id: 0,
-                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                    payload: rmp_serde::to_vec(&create_cmd)?,
-                })
+                let mut it = rest.split_whitespace();
+                let name = it.next().unwrap_or("Hero");
+                let class = it.next().unwrap_or("warrior");
+                ("create_character", args::create_character(name, class)?)
             }
-            _ => {
-                println!("Unknown command.");
+            other => {
+                println!("Unknown command '{}'. Try 'help'.", other);
                 continue;
             }
         };
 
-        writer.write_all(&codec.encode(&message)?).await?;
-
-        match reader.read_exact(&mut len_buf).await {
-            Ok(_n) => {
-                let total_len = u32::from_be_bytes(len_buf) as usize;
-                let mut frame = vec![0u8; total_len - 4];
-                reader.read_exact(&mut frame).await?;
-
-                let mut full_frame = BytesMut::with_capacity(4 + total_len);
-                full_frame.put_slice(&len_buf);
-                full_frame.put_slice(&frame);
-
-                let mut buf = full_frame;
-                if let Some(response) = ProtocolCodec::decode_simple(&mut buf)? {
-                    match response.message_type {
-                        MessageType::CommandResponse => {
-                            let resp: CommandResponse = rmp_serde::from_slice(&response.payload)?;
-                            if resp.success {
-                                if let Ok(look) =
-                                    rmp_serde::from_slice::<LookResponse>(&resp.payload)
-                                {
-                                    println!("\n=== {} ===", look.room_name);
-                                    println!("{}", look.room_description);
-                                    if !look.exits.is_empty() {
-                                        println!("\nExits: {}", look.exits.join(", "));
-                                    }
-                                    for p in &look.players {
-                                        println!("{} is here.", p.name);
-                                    }
-                                    for n in &look.npcs {
-                                        println!("{} (HP: {}/{})", n.name, n.hp, n.max_hp);
-                                    }
-                                } else if let Ok(mv) =
-                                    rmp_serde::from_slice::<MoveResponse>(&resp.payload)
-                                {
-                                    println!("Moved to {}.", mv.room_name.unwrap_or_default());
-                                    println!("{}", mv.room_description.unwrap_or_default());
-                                } else if let Ok(atk) =
-                                    rmp_serde::from_slice::<AttackResponse>(&resp.payload)
-                                {
-                                    println!("{}", atk.message.unwrap_or_default());
-                                } else if let Ok(inv) =
-                                    rmp_serde::from_slice::<InventoryResponse>(&resp.payload)
-                                {
-                                    println!("\n=== Inventory ===");
-                                    for item in &inv.items {
-                                        println!("  {} x{}", item.name, item.quantity);
-                                    }
-                                    println!("Gold: {}", inv.gold);
-                                } else {
-                                    println!("Response received.");
-                                }
-                            } else {
-                                println!("Error: {}", resp.error.unwrap_or_default());
-                            }
-                        }
-                        MessageType::Error => {
-                            let err: ErrorResponse = rmp_serde::from_slice(&response.payload)?;
-                            println!("Error: {}", err.message);
-                        }
-                        _ => {}
-                    }
-                }
-            }
+        match conn.request(command, payload).await {
+            Ok(response) => print_response(command, &response),
             Err(e) => {
-                println!("Connection lost: {}", e);
+                println!("Error: {}", e);
                 break;
             }
         }
+
+        // Anything the server pushed while we waited. Before the shared
+        // client existed these were silently swallowed as if they were the
+        // command's reply.
+        for pushed in conn.take_pushed() {
+            match pushed {
+                Pushed::Presentation(commands) => {
+                    for command in &commands {
+                        println!("  {}", describe(command));
+                    }
+                }
+                Pushed::OtherEvent { event_type } => {
+                    tracing::debug!("unhandled event type: {}", event_type);
+                }
+                Pushed::Disconnect => println!("  (server closed the session)"),
+            }
+        }
     }
+
     Ok(())
+}
+
+fn print_help() {
+    println!("Available commands:");
+    println!("  look              - Look around");
+    println!("  move <direction>  - north/south/east/west/up/down");
+    println!("  attack <target>   - Attack an NPC");
+    println!("  inventory         - Check inventory");
+    println!("  create <name> <class> - Create character (warrior/mage/rogue/cleric)");
+    println!("  quit              - Disconnect");
+}
+
+fn print_response(command: &str, response: &CommandResponse) {
+    if !response.success {
+        println!(
+            "Error: {}",
+            response.error.as_deref().unwrap_or("unknown error")
+        );
+        return;
+    }
+
+    // Decode by the command we sent rather than guessing at the payload.
+    // The old clients tried each response type in turn until one
+    // deserialized, which quietly mis-rendered whenever two shapes happened
+    // to be compatible.
+    match command {
+        "look" => match rmp_serde::from_slice::<LookResponse>(&response.payload) {
+            Ok(look) => print_look(&look),
+            Err(e) => println!("(couldn't read look response: {})", e),
+        },
+        "move" => match rmp_serde::from_slice::<MoveResponse>(&response.payload) {
+            Ok(m) => {
+                println!("\nYou move to {}.", m.room_name.unwrap_or_default());
+                println!("{}", m.room_description.unwrap_or_default());
+            }
+            Err(e) => println!("(couldn't read move response: {})", e),
+        },
+        "attack" => match rmp_serde::from_slice::<AttackResponse>(&response.payload) {
+            Ok(a) => println!("{}", a.message.unwrap_or_default()),
+            Err(e) => println!("(couldn't read attack response: {})", e),
+        },
+        "inventory" => match rmp_serde::from_slice::<InventoryResponse>(&response.payload) {
+            Ok(inv) => {
+                println!("\n=== Inventory ===");
+                if inv.items.is_empty() {
+                    println!("  Empty");
+                }
+                for item in &inv.items {
+                    println!("  {} x{}", item.name, item.quantity);
+                }
+                println!("Gold: {}", inv.gold);
+            }
+            Err(e) => println!("(couldn't read inventory response: {})", e),
+        },
+        _ => println!("OK"),
+    }
+}
+
+fn print_look(look: &LookResponse) {
+    println!("\n=== {} ===", look.room_name);
+    println!("{}", look.room_description);
+    if !look.exits.is_empty() {
+        println!("\nExits: {}", look.exits.join(", "));
+    }
+    if !look.players.is_empty() {
+        println!("\nPlayers here:");
+        for p in &look.players {
+            println!("  {} (Level {})", p.name, p.level);
+        }
+    }
+    if !look.npcs.is_empty() {
+        println!("\nNPCs here:");
+        for n in &look.npcs {
+            println!("  {} (HP: {}/{})", n.name, n.hp, n.max_hp);
+        }
+    }
 }

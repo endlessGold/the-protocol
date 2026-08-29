@@ -1,0 +1,17 @@
+[package]
+name = "protocol-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio.workspace = true
+serde_json.workspace = true
+rmp-serde.workspace = true
+bytes.workspace = true
+rand.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+protocol-protocol = { path = "../../core/protocol" }
+protocol-presentation = { path = "../../core/presentation" }

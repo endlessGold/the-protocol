@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use bytes::BufMut;
 use clap::{Parser, Subcommand};
-use tokio::io::AsyncBufReadExt;
 use tokio::sync::RwLock;
 
 use protocol_application::GameWorld;
@@ -179,260 +177,51 @@ async fn run_server(bind: &str, plugin_dir: &str) -> Result<()> {
     Ok(())
 }
 
+/// Client mode.
+///
+/// The interactive REPL lives in the `mud` binary (`clients/mud`); both it
+/// and this share `protocol-client` for the wire protocol. This subcommand
+/// stays because `runtime client` is a documented entry point, but it does
+/// not duplicate the REPL - it runs a short scripted session, which is also
+/// what makes it usable as a smoke check against a running server.
 async fn run_client(server_addr: &str) -> Result<()> {
-    tracing::info!(
-        "Starting The Protocol Runtime in CLIENT mode, connecting to {}",
-        server_addr
-    );
+    use protocol_client::{args, describe, Connection, Pushed};
 
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpStream;
+    tracing::info!("Connecting to {}", server_addr);
+    let mut conn = Connection::connect(server_addr).await?;
+    println!("Connected to server. Session: {}", conn.session_id());
 
-    let stream = TcpStream::connect(server_addr).await?;
-    stream.set_nodelay(true)?;
+    let steps: Vec<(&str, Vec<u8>)> = vec![
+        (
+            "create_character",
+            args::create_character("Runtime Client", "warrior")?,
+        ),
+        ("look", args::none()),
+        ("inventory", args::none()),
+    ];
 
-    let (mut reader, mut writer) = stream.into_split();
-
-    // Send Hello
-    let hello = Message::hello(ClientType::MUD, None);
-    let codec = ProtocolCodec::new();
-    let hello_bytes = codec.encode(&hello)?;
-    writer.write_all(&hello_bytes).await?;
-
-    // Read HelloAck
-    let mut len_buf = [0u8; 4];
-    reader.read_exact(&mut len_buf).await?;
-    let total_len = u32::from_be_bytes(len_buf) as usize;
-    let mut frame = vec![0u8; total_len - 4];
-    reader.read_exact(&mut frame).await?;
-
-    let mut full_frame = bytes::BytesMut::with_capacity(4 + total_len);
-    full_frame.put_slice(&len_buf);
-    full_frame.put_slice(&frame);
-
-    let mut buf = full_frame;
-    let ack =
-        ProtocolCodec::decode_simple(&mut buf)?.ok_or_else(|| anyhow::anyhow!("No response"))?;
-
-    match ack.message_type {
-        MessageType::HelloAck => {
-            let hello_ack: HelloAck = rmp_serde::from_slice(&ack.payload)?;
-            tracing::info!("Connected! Session ID: {}", hello_ack.session_id);
-            println!("Connected to server. Session: {}", hello_ack.session_id);
-            println!("Type 'help' for available commands.");
-        }
-        _ => {
-            tracing::error!("Unexpected response");
-            return Err(anyhow::anyhow!("Handshake failed"));
-        }
-    }
-
-    // Interactive MUD loop
-    let stdin = tokio::io::stdin();
-    let mut reader = tokio::io::BufReader::new(stdin);
-    let mut input = String::new();
-
-    loop {
-        input.clear();
-        print!("> ");
-        use std::io::Write;
-        std::io::stdout().flush()?;
-
-        let bytes_read = reader.read_line(&mut input).await?;
-        if bytes_read == 0 {
-            break;
-        }
-
-        let input = input.trim();
-        if input.is_empty() {
-            continue;
-        }
-
-        let parts: Vec<&str> = input.splitn(2, ' ').collect();
-        let cmd = parts[0].to_lowercase();
-
-        let message = match cmd.as_str() {
-            "quit" | "exit" => {
-                println!("Goodbye!");
-                break;
+    for (command, payload) in steps {
+        let response = conn.request(command, payload).await?;
+        println!(
+            "{}: {}",
+            command,
+            if response.success {
+                "ok".to_string()
+            } else {
+                response.error.clone().unwrap_or_default()
             }
-            "help" => {
-                println!("Available commands:");
-                println!("  look              - Look around");
-                println!("  move <direction>  - Move (north/south/east/west/up/down)");
-                println!("  attack <target>   - Attack an NPC");
-                println!("  inventory         - Check inventory");
-                println!("  create <name> <class> - Create character");
-                println!("  quit              - Disconnect");
-                continue;
-            }
-            "look" => {
-                let cmd = Command {
-                    id: rand::random(),
-                    command_type: "look".to_string(),
-                    session_id: 0,
-                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                    payload: vec![],
-                };
-                Message::command(cmd)
-            }
-            "move" => {
-                let direction = parts.get(1).unwrap_or(&"");
-                let dir = match *direction {
-                    "north" | "n" => protocol_protocol::Direction::North,
-                    "south" | "s" => protocol_protocol::Direction::South,
-                    "east" | "e" => protocol_protocol::Direction::East,
-                    "west" | "w" => protocol_protocol::Direction::West,
-                    "up" | "u" => protocol_protocol::Direction::Up,
-                    "down" | "d" => protocol_protocol::Direction::Down,
-                    _ => protocol_protocol::Direction::North,
-                };
-                let move_cmd = MoveCommand { direction: dir };
-                let payload = rmp_serde::to_vec(&move_cmd)?;
-                let cmd = Command {
-                    id: rand::random(),
-                    command_type: "move".to_string(),
-                    session_id: 0,
-                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                    payload,
-                };
-                Message::command(cmd)
-            }
-            "attack" => {
-                let target = parts.get(1).unwrap_or(&"");
-                let cmd = Command {
-                    id: rand::random(),
-                    command_type: "attack".to_string(),
-                    session_id: 0,
-                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                    payload: target.as_bytes().to_vec(),
-                };
-                Message::command(cmd)
-            }
-            "inventory" => {
-                let cmd = Command {
-                    id: rand::random(),
-                    command_type: "inventory".to_string(),
-                    session_id: 0,
-                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                    payload: vec![],
-                };
-                Message::command(cmd)
-            }
-            "create" => {
-                let name = parts.get(1).unwrap_or(&"Hero");
-                let class = parts.get(2).unwrap_or(&"warrior");
-                let create_cmd = CreateCharacterCommand {
-                    name: name.to_string(),
-                    class: class.to_string(),
-                };
-                let payload = rmp_serde::to_vec(&create_cmd)?;
-                let cmd = Command {
-                    id: rand::random(),
-                    command_type: "create_character".to_string(),
-                    session_id: 0,
-                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                    payload,
-                };
-                Message::command(cmd)
-            }
-            _ => {
-                println!("Unknown command. Type 'help' for available commands.");
-                continue;
-            }
-        };
+        );
 
-        // Send command
-        let msg_bytes = codec.encode(&message)?;
-        writer.write_all(&msg_bytes).await?;
-
-        // Read response
-        match reader.read_exact(&mut len_buf).await {
-            Ok(_) => {
-                let total_len = u32::from_be_bytes(len_buf) as usize;
-                let mut frame = vec![0u8; total_len - 4];
-                reader.read_exact(&mut frame).await?;
-
-                let mut full_frame = bytes::BytesMut::with_capacity(4 + total_len);
-                full_frame.put_slice(&len_buf);
-                full_frame.put_slice(&frame);
-
-                let mut buf = full_frame;
-                if let Some(response) = ProtocolCodec::decode_simple(&mut buf)? {
-                    match response.message_type {
-                        MessageType::CommandResponse => {
-                            let resp: CommandResponse = rmp_serde::from_slice(&response.payload)?;
-                            if resp.success {
-                                if let Ok(look_resp) =
-                                    rmp_serde::from_slice::<LookResponse>(&resp.payload)
-                                {
-                                    println!("\n=== {} ===", look_resp.room_name);
-                                    println!("{}", look_resp.room_description);
-                                    if !look_resp.exits.is_empty() {
-                                        println!("\nExits: {}", look_resp.exits.join(", "));
-                                    }
-                                    if !look_resp.players.is_empty() {
-                                        println!("\nPlayers here:");
-                                        for p in &look_resp.players {
-                                            println!("  {} (Level {})", p.name, p.level);
-                                        }
-                                    }
-                                    if !look_resp.npcs.is_empty() {
-                                        println!("\nNPCs here:");
-                                        for n in &look_resp.npcs {
-                                            println!("  {} (HP: {}/{})", n.name, n.hp, n.max_hp);
-                                        }
-                                    }
-                                } else if let Ok(move_resp) =
-                                    rmp_serde::from_slice::<MoveResponse>(&resp.payload)
-                                {
-                                    println!(
-                                        "\nYou move to {}.",
-                                        move_resp.room_name.unwrap_or_default()
-                                    );
-                                    println!("{}", move_resp.room_description.unwrap_or_default());
-                                } else if let Ok(attack_resp) =
-                                    rmp_serde::from_slice::<AttackResponse>(&resp.payload)
-                                {
-                                    println!("{}", attack_resp.message.unwrap_or_default());
-                                } else if let Ok(inv_resp) =
-                                    rmp_serde::from_slice::<InventoryResponse>(&resp.payload)
-                                {
-                                    println!("\n=== Inventory ===");
-                                    if inv_resp.items.is_empty() {
-                                        println!("  Empty");
-                                    } else {
-                                        for item in &inv_resp.items {
-                                            println!("  {} x{}", item.name, item.quantity);
-                                        }
-                                    }
-                                    println!("Gold: {}", inv_resp.gold);
-                                } else {
-                                    let display = String::from_utf8_lossy(&resp.payload);
-                                    println!("{}", display);
-                                }
-                            } else {
-                                println!(
-                                    "Error: {}",
-                                    resp.error.unwrap_or_else(|| "Unknown error".to_string())
-                                );
-                            }
-                        }
-                        MessageType::Error => {
-                            let error: ErrorResponse = rmp_serde::from_slice(&response.payload)?;
-                            println!("Error: {}", error.message);
-                        }
-                        _ => {}
-                    }
+        for pushed in conn.take_pushed() {
+            if let Pushed::Presentation(commands) = pushed {
+                for command in &commands {
+                    println!("  {}", describe(command));
                 }
             }
-            Err(e) => {
-                println!("Connection lost: {}", e);
-                break;
-            }
         }
     }
 
+    println!("Done. For an interactive session, run the `mud` binary.");
     Ok(())
 }
 
