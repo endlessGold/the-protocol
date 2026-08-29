@@ -223,6 +223,65 @@ mod wire_format_contract {
     }
 
     #[test]
+    fn command_is_a_positional_array_with_payload_as_byte_integers() {
+        // godot-client's _build_command_payload() hand-encodes this.
+        use crate::message::Command;
+        let command = Command {
+            id: 7,
+            command_type: "look".to_string(),
+            session_id: 0,
+            timestamp: 1,
+            payload: vec![0xAB],
+        };
+        let encoded = rmp_serde::to_vec(&command).unwrap();
+
+        // fixarray(5): [id, command_type, session_id, timestamp, payload]
+        assert_eq!(encoded[0], 0x95, "Command should be a 5-element array");
+        // payload: fixarray(1) containing uint8 0xAB -> 0x91 0xcc 0xab.
+        // NOT bin8 (0xc4 0x01 0xab).
+        assert!(
+            encoded.windows(3).any(|w| w == [0x91, 0xcc, 0xab]),
+            "Command.payload should be an array of byte integers; got {:02x?}",
+            encoded
+        );
+    }
+
+    #[test]
+    fn move_command_direction_encodes_as_its_variant_name() {
+        // godot-client's DIRECTIONS map hardcodes these exact strings.
+        use crate::message::{Direction, MoveCommand};
+        let encoded = rmp_serde::to_vec(&MoveCommand {
+            direction: Direction::North,
+        })
+        .unwrap();
+
+        // fixarray(1) then fixstr(5) "North" - a NAME, not an ordinal.
+        assert_eq!(
+            encoded,
+            vec![0x91, 0xa5, b'N', b'o', b'r', b't', b'h'],
+            "Direction should encode as its variant name - godot-client's \
+             DIRECTIONS map must match these spellings exactly"
+        );
+    }
+
+    #[test]
+    fn create_character_command_is_two_strings() {
+        // godot-client's cmd_create_character() hand-encodes this.
+        use crate::message::CreateCharacterCommand;
+        let encoded = rmp_serde::to_vec(&CreateCharacterCommand {
+            name: "Hero".to_string(),
+            class: "warrior".to_string(),
+        })
+        .unwrap();
+
+        let mut expected = vec![0x92, 0xa4];
+        expected.extend_from_slice(b"Hero");
+        expected.push(0xa7);
+        expected.extend_from_slice(b"warrior");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
     fn frame_header_is_fourteen_bytes_before_the_payload() {
         // Every hand-rolled client depends on
         // payload_len = total_length - 14 - 4 (header + trailing checksum).

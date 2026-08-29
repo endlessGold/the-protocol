@@ -169,6 +169,49 @@ jobs:
             echo "::error::extension test did not report PASS"; exit 1; }
           exit $status
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Build the server
+        run: cargo build --release -p protocol-runtime
+
+      - name: Network test (Godot client against a live server)
+        run: |
+          set -uo pipefail
+          # This is the only test that exercises core_client.gd's
+          # hand-rolled MessagePack against a real server. The Rust-side
+          # contract tests pin the expected bytes; this proves the GDScript
+          # actually produces them and can parse the replies.
+          ./target/release/runtime server --bind 127.0.0.1:7770 > server.log 2>&1 &
+          server_pid=$!
+          trap 'kill $server_pid 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 30); do
+            if ss -ltn 2>/dev/null | grep -q ':7770'; then break; fi
+            if ! kill -0 $server_pid 2>/dev/null; then
+              echo "::error::server exited during startup"; cat server.log; exit 1
+            fi
+            sleep 1
+          done
+          ss -ltn | grep ':7770' || { echo "::error::server never listened on 7770"; cat server.log; exit 1; }
+          echo "server up (pid $server_pid)"
+
+          timeout 300 godot --headless --path godot-client \
+            --script res://tests/network_smoke_test.gd 2>&1 | tee net.log
+          status=${PIPESTATUS[0]}
+
+          echo "--- server log ---"
+          cat server.log
+
+          grep -q "NETWORK_TEST_RESULT: PASS" net.log || {
+            echo "::error::network test did not report PASS"; exit 1; }
+          exit $status
+
   fmt-and-clippy:
     name: cargo fmt --check & clippy
     runs-on: ubuntu-latest
