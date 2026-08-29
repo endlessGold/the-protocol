@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use bytes::{BufMut, BytesMut};
+use bytes::BufMut;
 use clap::{Parser, Subcommand};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncBufReadExt;
 use tokio::sync::RwLock;
 
 use protocol_application::GameWorld;
@@ -66,46 +66,57 @@ async fn run_server(bind: &str, plugin_dir: &str) -> Result<()> {
         CapabilityManager::new(protocol_security::RuntimeCapabilities::server());
     let game_world = Arc::new(RwLock::new(GameWorld::new()));
 
-    // Initialize WASM plugin engine
-    let shared_state = Arc::new(SharedState::new());
-    let mut plugin_engine = PluginEngine::with_shared_state(plugin_dir, shared_state);
+    // Initialize WASM plugin engine, if this runtime profile allows one.
+    // This is the first thing that actually consults CapabilityManager -
+    // it was previously constructed and never read, and its
+    // has_runtime_capability() returned true unconditionally, so the whole
+    // capability system was decorative.
+    let mut plugin_engine = if capability_manager.has_runtime_capability("plugin_runtime") {
+        let shared_state = Arc::new(SharedState::new());
+        Some(PluginEngine::with_shared_state(plugin_dir, shared_state))
+    } else {
+        tracing::info!("plugin_runtime capability is off for this profile; skipping plugins");
+        None
+    };
 
     // Discover and compile plugins
-    match plugin_engine.discover() {
-        Ok(manifests) => {
-            for manifest in &manifests {
-                tracing::info!("Discovered plugin: {} v{}", manifest.name, manifest.version);
-                if let Err(e) = plugin_engine.compile(&manifest.name) {
-                    tracing::error!("Failed to compile plugin {}: {}", manifest.name, e);
-                    continue;
+    if let Some(engine) = plugin_engine.as_mut() {
+        match engine.discover() {
+            Ok(manifests) => {
+                for manifest in &manifests {
+                    tracing::info!("Discovered plugin: {} v{}", manifest.name, manifest.version);
+                    if let Err(e) = engine.compile(&manifest.name) {
+                        tracing::error!("Failed to compile plugin {}: {}", manifest.name, e);
+                        continue;
+                    }
+
+                    let context = HostContext {
+                        player_id: 0,
+                        room_id: 1,
+                        plugin_name: manifest.name.clone(),
+                    };
+
+                    if let Err(e) = engine.instantiate(&manifest.name, context) {
+                        tracing::error!("Failed to instantiate plugin {}: {}", manifest.name, e);
+                        continue;
+                    }
+
+                    if let Err(e) = engine.initialize(&manifest.name) {
+                        tracing::error!("Failed to initialize plugin {}: {}", manifest.name, e);
+                        continue;
+                    }
+
+                    if let Err(e) = engine.enable(&manifest.name) {
+                        tracing::error!("Failed to enable plugin {}: {}", manifest.name, e);
+                        continue;
+                    }
+
+                    tracing::info!("Plugin {} loaded and enabled", manifest.name);
                 }
-
-                let context = HostContext {
-                    player_id: 0,
-                    room_id: 1,
-                    plugin_name: manifest.name.clone(),
-                };
-
-                if let Err(e) = plugin_engine.instantiate(&manifest.name, context) {
-                    tracing::error!("Failed to instantiate plugin {}: {}", manifest.name, e);
-                    continue;
-                }
-
-                if let Err(e) = plugin_engine.initialize(&manifest.name) {
-                    tracing::error!("Failed to initialize plugin {}: {}", manifest.name, e);
-                    continue;
-                }
-
-                if let Err(e) = plugin_engine.enable(&manifest.name) {
-                    tracing::error!("Failed to enable plugin {}: {}", manifest.name, e);
-                    continue;
-                }
-
-                tracing::info!("Plugin {} loaded and enabled", manifest.name);
             }
-        }
-        Err(e) => {
-            tracing::warn!("Failed to discover plugins: {}", e);
+            Err(e) => {
+                tracing::warn!("Failed to discover plugins: {}", e);
+            }
         }
     }
 
@@ -177,7 +188,7 @@ async fn run_client(server_addr: &str) -> Result<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
 
-    let mut stream = TcpStream::connect(server_addr).await?;
+    let stream = TcpStream::connect(server_addr).await?;
     stream.set_nodelay(true)?;
 
     let (mut reader, mut writer) = stream.into_split();
@@ -839,7 +850,7 @@ impl protocol_routing::CommandHandler for InventoryHandler {
         let inventory = world
             .get_inventory(character_id)
             .cloned()
-            .unwrap_or_else(|| Inventory::new());
+            .unwrap_or_else(Inventory::new);
 
         let response = InventoryResponse {
             items: inventory
@@ -885,7 +896,7 @@ impl protocol_routing::CommandHandler for CreateCharacterHandler {
 
         let mut world = self.game_world.write().await;
         match world.create_character(create_cmd.name, &create_cmd.class) {
-            Ok(mut character) => {
+            Ok(character) => {
                 let character_id = character.id;
                 world.add_character(character);
 
