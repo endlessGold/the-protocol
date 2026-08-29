@@ -14,13 +14,13 @@ struct CompiledModule {
 
 struct LoadedPluginInstance {
     store: Store<HostState>,
+    instance: Instance,
     /// Kept for the permission/resource enforcement that isn't wired yet:
     /// manifests declare `[permissions]` and `memory_limit`, and nothing
     /// currently consults either (see CapabilityManager, which is
     /// constructed and never used). Remove this if that plan is abandoned
     /// rather than leaving it as decoration.
     #[allow(dead_code)]
-    manifest: PluginManifest,
     manifest: PluginManifest,
     state: PluginState,
 }
