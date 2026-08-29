@@ -1,5 +1,3 @@
-use serde::{Deserialize, Serialize};
-
 pub mod codec;
 pub mod message;
 

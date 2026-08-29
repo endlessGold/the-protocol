@@ -9,6 +9,9 @@ pub enum CharacterClass {
 }
 
 impl CharacterClass {
+    // Not `std::str::FromStr`: that returns Result, and an unrecognized
+    // name here is ordinary user input rather than an error worth a type.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "warrior" => Some(Self::Warrior),

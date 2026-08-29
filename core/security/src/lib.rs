@@ -39,6 +39,9 @@ pub enum Permission {
 }
 
 impl Permission {
+    // Not `std::str::FromStr`: that returns Result, and an unrecognized
+    // name here is ordinary user input rather than an error worth a type.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "player.read" => Some(Self::PlayerRead),
