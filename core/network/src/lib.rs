@@ -125,7 +125,7 @@ impl NetworkManager {
         tracing::info!("Session {} handshake complete", session_id);
 
         // Main read loop
-        let mut incoming_rx = {
+        let incoming_rx = {
             let session = session_manager
                 .get(session_id)
                 .ok_or(NetworkError::Closed)?;
