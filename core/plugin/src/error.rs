@@ -6,16 +6,10 @@ pub enum PluginError {
     NotFound(String),
 
     #[error("Incompatible API version: plugin {plugin} requires {required}")]
-    IncompatibleApiVersion {
-        plugin: String,
-        required: String,
-    },
+    IncompatibleApiVersion { plugin: String, required: String },
 
     #[error("Permission denied: plugin {plugin} cannot use {permission}")]
-    PermissionDenied {
-        plugin: String,
-        permission: String,
-    },
+    PermissionDenied { plugin: String, permission: String },
 
     #[error("Plugin initialization failed: {0}")]
     InitFailed(String),

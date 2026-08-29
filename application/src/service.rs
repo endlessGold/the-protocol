@@ -78,7 +78,11 @@ impl GameWorld {
         std::mem::take(&mut self.pending_events)
     }
 
-    pub fn create_character(&mut self, name: String, class: &str) -> Result<Character, ApplicationError> {
+    pub fn create_character(
+        &mut self,
+        name: String,
+        class: &str,
+    ) -> Result<Character, ApplicationError> {
         let class = CharacterClass::from_str(class)
             .ok_or_else(|| ApplicationError::InvalidCharacterName(class.to_string()))?;
 
@@ -94,7 +98,11 @@ impl GameWorld {
         // Place in starting room
         character.room_id = 1;
 
-        tracing::info!("Created character: {} ({}) in room 1", character.name, character.id);
+        tracing::info!(
+            "Created character: {} ({}) in room 1",
+            character.name,
+            character.id
+        );
 
         self.pending_events.push(DomainEvent::CharacterCreated {
             character_id: character.id,
@@ -123,7 +131,9 @@ impl GameWorld {
     pub fn look_room(&self, room_id: u32) -> Option<RoomInfo> {
         let room = self.world.get_room(room_id)?;
 
-        let players: Vec<PlayerSummary> = self.characters.values()
+        let players: Vec<PlayerSummary> = self
+            .characters
+            .values()
             .filter(|c| c.room_id == room_id)
             .map(|c| PlayerSummary {
                 id: c.id,
@@ -132,7 +142,9 @@ impl GameWorld {
             })
             .collect();
 
-        let npcs: Vec<NpcSummary> = room.npc_ids.iter()
+        let npcs: Vec<NpcSummary> = room
+            .npc_ids
+            .iter()
             .filter_map(|id| self.world.get_npc(*id))
             .map(|npc| NpcSummary {
                 id: npc.id,
@@ -142,7 +154,9 @@ impl GameWorld {
             })
             .collect();
 
-        let exits: Vec<String> = room.exits.keys()
+        let exits: Vec<String> = room
+            .exits
+            .keys()
             .map(|d| format!("{:?}", d).to_lowercase())
             .collect();
 
@@ -160,14 +174,20 @@ impl GameWorld {
         character_id: u64,
         direction: Direction,
     ) -> Result<MoveResult, ApplicationError> {
-        let character = self.characters.get(&character_id)
+        let character = self
+            .characters
+            .get(&character_id)
             .ok_or(ApplicationError::CharacterNotFound(character_id))?;
 
         let current_room_id = character.room_id;
-        let current_room = self.world.get_room(current_room_id)
+        let current_room = self
+            .world
+            .get_room(current_room_id)
             .ok_or(ApplicationError::NoExit)?;
 
-        let new_room_id = *current_room.exits.get(&direction)
+        let new_room_id = *current_room
+            .exits
+            .get(&direction)
             .ok_or(ApplicationError::NoExit)?;
 
         // Update character position
@@ -175,7 +195,9 @@ impl GameWorld {
             character.room_id = new_room_id;
         }
 
-        let new_room = self.world.get_room(new_room_id)
+        let new_room = self
+            .world
+            .get_room(new_room_id)
             .ok_or(ApplicationError::NoExit)?;
 
         self.pending_events.push(DomainEvent::PlayerLeftRoom {
@@ -204,11 +226,15 @@ impl GameWorld {
             return Err(ApplicationError::SelfAttack);
         }
 
-        let attacker_room_id = self.characters.get(&attacker_id)
+        let attacker_room_id = self
+            .characters
+            .get(&attacker_id)
             .ok_or(ApplicationError::CharacterNotFound(attacker_id))?
             .room_id;
 
-        let target_npc_id = self.world.find_npc_in_room(attacker_room_id, target_name)
+        let target_npc_id = self
+            .world
+            .find_npc_in_room(attacker_room_id, target_name)
             .ok_or_else(|| ApplicationError::NpcNotFound(0))?
             .id;
 
@@ -227,10 +253,13 @@ impl GameWorld {
 
         let events = combat.process_attack(attacker, target_npc);
 
-        let damage = events.iter().find_map(|e| match e {
-            DomainEvent::AttackExecuted { damage, .. } => Some(*damage),
-            _ => None,
-        }).unwrap_or(0);
+        let damage = events
+            .iter()
+            .find_map(|e| match e {
+                DomainEvent::AttackExecuted { damage, .. } => Some(*damage),
+                _ => None,
+            })
+            .unwrap_or(0);
         let message = format!("You hit {} for {} damage!", target_npc.name, damage);
         let target_hp = target_npc.hp;
         let target_max_hp = target_npc.max_hp;
@@ -298,11 +327,7 @@ impl GameWorld {
     }
 
     /// Move an NPC one room in `direction`, if that exit exists.
-    pub fn move_npc(
-        &mut self,
-        npc_id: u64,
-        direction: Direction,
-    ) -> Result<u32, ApplicationError> {
+    pub fn move_npc(&mut self, npc_id: u64, direction: Direction) -> Result<u32, ApplicationError> {
         let from_room_id = self
             .world
             .get_npc(npc_id)

@@ -170,18 +170,23 @@ impl PresentationSink for VecSink {
 /// the match arm.
 pub fn translate_event(event: &DomainEvent) -> Vec<PresentationCommand> {
     match event {
-        DomainEvent::CharacterCreated { character_id, name } => vec![PresentationCommand::SpawnEntity {
-            entity_id: *character_id,
-            kind: EntityKind::Player,
-            // CharacterCreated doesn't carry a room_id - new characters
-            // always start in room 1 today (application::GameWorld::
-            // create_character). If that ever changes, this event needs a
-            // room_id field too.
-            room_id: 1,
-            display_name: name.clone(),
-        }],
+        DomainEvent::CharacterCreated { character_id, name } => {
+            vec![PresentationCommand::SpawnEntity {
+                entity_id: *character_id,
+                kind: EntityKind::Player,
+                // CharacterCreated doesn't carry a room_id - new characters
+                // always start in room 1 today (application::GameWorld::
+                // create_character). If that ever changes, this event needs a
+                // room_id field too.
+                room_id: 1,
+                display_name: name.clone(),
+            }]
+        }
 
-        DomainEvent::LevelUp { character_id, new_level } => vec![
+        DomainEvent::LevelUp {
+            character_id,
+            new_level,
+        } => vec![
             PresentationCommand::UpdateProperty {
                 entity_id: *character_id,
                 key: "level".to_string(),
@@ -200,7 +205,12 @@ pub fn translate_event(event: &DomainEvent) -> Vec<PresentationCommand> {
         // pure event->command translator doesn't have; whatever eventually
         // dispatches DomainEvents needs to look up current hp itself and
         // emit that UpdateProperty alongside this one.
-        DomainEvent::AttackExecuted { attacker_id, target_id, damage, .. } => vec![PresentationCommand::PlayEffect {
+        DomainEvent::AttackExecuted {
+            attacker_id,
+            target_id,
+            damage,
+            ..
+        } => vec![PresentationCommand::PlayEffect {
             name: "hit".to_string(),
             entity_id: Some(*target_id),
             params: HashMap::from([
@@ -209,30 +219,48 @@ pub fn translate_event(event: &DomainEvent) -> Vec<PresentationCommand> {
             ]),
         }],
 
-        DomainEvent::CombatEnded { winner_id, loser_id, .. } => vec![
-            PresentationCommand::DespawnEntity { entity_id: *loser_id },
+        DomainEvent::CombatEnded {
+            winner_id,
+            loser_id,
+            ..
+        } => vec![
+            PresentationCommand::DespawnEntity {
+                entity_id: *loser_id,
+            },
             PresentationCommand::ShowMessage {
                 text: format!("Combat ended - {} defeated {}", winner_id, loser_id),
                 target_entity_id: None,
             },
         ],
 
-        DomainEvent::PlayerEnteredRoom { player_id, room_id } => vec![PresentationCommand::EnterRoom {
-            entity_id: *player_id,
-            room_id: *room_id,
-        }],
+        DomainEvent::PlayerEnteredRoom { player_id, room_id } => {
+            vec![PresentationCommand::EnterRoom {
+                entity_id: *player_id,
+                room_id: *room_id,
+            }]
+        }
 
-        DomainEvent::PlayerLeftRoom { player_id, room_id } => vec![PresentationCommand::LeaveRoom {
-            entity_id: *player_id,
-            room_id: *room_id,
-        }],
+        DomainEvent::PlayerLeftRoom { player_id, room_id } => {
+            vec![PresentationCommand::LeaveRoom {
+                entity_id: *player_id,
+                room_id: *room_id,
+            }]
+        }
 
-        DomainEvent::ItemAcquired { player_id, item_id, quantity } => vec![PresentationCommand::ShowMessage {
+        DomainEvent::ItemAcquired {
+            player_id,
+            item_id,
+            quantity,
+        } => vec![PresentationCommand::ShowMessage {
             text: format!("Picked up {}x item #{}", quantity, item_id),
             target_entity_id: Some(*player_id),
         }],
 
-        DomainEvent::ItemRemoved { player_id, item_id, quantity } => vec![PresentationCommand::ShowMessage {
+        DomainEvent::ItemRemoved {
+            player_id,
+            item_id,
+            quantity,
+        } => vec![PresentationCommand::ShowMessage {
             text: format!("Lost {}x item #{}", quantity, item_id),
             target_entity_id: Some(*player_id),
         }],
@@ -241,7 +269,11 @@ pub fn translate_event(event: &DomainEvent) -> Vec<PresentationCommand> {
         // PlayEffect already implies. Left unmapped rather than guessing.
         DomainEvent::CombatStarted { .. } => vec![],
 
-        DomainEvent::NpcSpawned { npc_id, name, room_id } => vec![PresentationCommand::SpawnEntity {
+        DomainEvent::NpcSpawned {
+            npc_id,
+            name,
+            room_id,
+        } => vec![PresentationCommand::SpawnEntity {
             entity_id: *npc_id,
             kind: EntityKind::Npc,
             room_id: *room_id,
@@ -251,7 +283,11 @@ pub fn translate_event(event: &DomainEvent) -> Vec<PresentationCommand> {
         // Both halves are emitted so a client can update the room it's
         // leaving as well as the one it's entering - the two rooms have
         // different audiences once dispatch is room-scoped.
-        DomainEvent::NpcMoved { npc_id, from_room_id, to_room_id } => vec![
+        DomainEvent::NpcMoved {
+            npc_id,
+            from_room_id,
+            to_room_id,
+        } => vec![
             PresentationCommand::LeaveRoom {
                 entity_id: *npc_id,
                 room_id: *from_room_id,
@@ -262,9 +298,9 @@ pub fn translate_event(event: &DomainEvent) -> Vec<PresentationCommand> {
             },
         ],
 
-        DomainEvent::NpcDespawned { npc_id, .. } => vec![PresentationCommand::DespawnEntity {
-            entity_id: *npc_id,
-        }],
+        DomainEvent::NpcDespawned { npc_id, .. } => {
+            vec![PresentationCommand::DespawnEntity { entity_id: *npc_id }]
+        }
     }
 }
 
@@ -292,11 +328,18 @@ mod tests {
 
     #[test]
     fn level_up_updates_property_and_plays_effect() {
-        let event = DomainEvent::LevelUp { character_id: 7, new_level: 5 };
+        let event = DomainEvent::LevelUp {
+            character_id: 7,
+            new_level: 5,
+        };
         let commands = translate_event(&event);
         assert_eq!(commands.len(), 2);
-        assert!(matches!(&commands[0], PresentationCommand::UpdateProperty { key, .. } if key == "level"));
-        assert!(matches!(&commands[1], PresentationCommand::PlayEffect { name, .. } if name == "level_up"));
+        assert!(
+            matches!(&commands[0], PresentationCommand::UpdateProperty { key, .. } if key == "level")
+        );
+        assert!(
+            matches!(&commands[1], PresentationCommand::PlayEffect { name, .. } if name == "level_up")
+        );
     }
 
     #[test]
@@ -309,7 +352,11 @@ mod tests {
         };
         let commands = translate_event(&event);
         match &commands[0] {
-            PresentationCommand::PlayEffect { name, entity_id, params } => {
+            PresentationCommand::PlayEffect {
+                name,
+                entity_id,
+                params,
+            } => {
                 assert_eq!(name, "hit");
                 assert_eq!(*entity_id, Some(2));
                 assert_eq!(params.get("damage"), Some(&PropertyValue::Int(42)));
@@ -320,7 +367,11 @@ mod tests {
 
     #[test]
     fn combat_started_has_no_mapping_yet() {
-        let event = DomainEvent::CombatStarted { combat_id: 1, attacker_id: 1, target_id: 2 };
+        let event = DomainEvent::CombatStarted {
+            combat_id: 1,
+            attacker_id: 1,
+            target_id: 2,
+        };
         assert_eq!(translate_event(&event), vec![]);
     }
 
@@ -367,8 +418,14 @@ mod tests {
                 display_name: "x".into(),
             },
             PresentationCommand::DespawnEntity { entity_id: 1 },
-            PresentationCommand::EnterRoom { entity_id: 1, room_id: 2 },
-            PresentationCommand::LeaveRoom { entity_id: 1, room_id: 2 },
+            PresentationCommand::EnterRoom {
+                entity_id: 1,
+                room_id: 2,
+            },
+            PresentationCommand::LeaveRoom {
+                entity_id: 1,
+                room_id: 2,
+            },
             PresentationCommand::UpdateProperty {
                 entity_id: 1,
                 key: "hp".into(),

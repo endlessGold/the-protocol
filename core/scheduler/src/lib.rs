@@ -2,9 +2,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
+use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum SchedulerError {
@@ -43,12 +43,7 @@ impl Scheduler {
         }
     }
 
-    pub fn schedule<F>(
-        &mut self,
-        name: &str,
-        delay: Duration,
-        task: F,
-    ) -> u64
+    pub fn schedule<F>(&mut self, name: &str, delay: Duration, task: F) -> u64
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -67,12 +62,7 @@ impl Scheduler {
         id
     }
 
-    pub fn schedule_interval<F>(
-        &mut self,
-        name: &str,
-        interval: Duration,
-        mut task: F,
-    ) -> u64
+    pub fn schedule_interval<F>(&mut self, name: &str, interval: Duration, mut task: F) -> u64
     where
         F: FnMut() + Send + 'static,
     {

@@ -6,14 +6,14 @@ use clap::{Parser, Subcommand};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
 
+use protocol_application::GameWorld;
+use protocol_domain::Inventory;
 use protocol_network::NetworkManager;
-use protocol_plugin::{PluginEngine, HostContext, SharedState};
+use protocol_plugin::{HostContext, PluginEngine, SharedState};
 use protocol_protocol::*;
 use protocol_routing::CommandRouter;
 use protocol_security::CapabilityManager;
 use protocol_session::SessionManager;
-use protocol_application::GameWorld;
-use protocol_domain::Inventory;
 
 #[derive(Parser)]
 #[command(name = "runtime", about = "The Protocol - Cross-Platform Game Runtime")]
@@ -60,8 +60,10 @@ async fn run_server(bind: &str, plugin_dir: &str) -> Result<()> {
 
     let session_manager = Arc::new(SessionManager::new(1000));
     let command_router = Arc::new(CommandRouter::new());
-    let network = NetworkManager::new(bind, session_manager.clone(), command_router.clone()).await?;
-    let capability_manager = CapabilityManager::new(protocol_security::RuntimeCapabilities::server());
+    let network =
+        NetworkManager::new(bind, session_manager.clone(), command_router.clone()).await?;
+    let capability_manager =
+        CapabilityManager::new(protocol_security::RuntimeCapabilities::server());
     let game_world = Arc::new(RwLock::new(GameWorld::new()));
 
     // Initialize WASM plugin engine
@@ -110,23 +112,53 @@ async fn run_server(bind: &str, plugin_dir: &str) -> Result<()> {
     // Register built-in command handlers
     let gw = game_world.clone();
     let sm = session_manager.clone();
-    command_router.register("look", Arc::new(LookHandler { game_world: gw, session_manager: sm }));
+    command_router.register(
+        "look",
+        Arc::new(LookHandler {
+            game_world: gw,
+            session_manager: sm,
+        }),
+    );
 
     let gw = game_world.clone();
     let sm = session_manager.clone();
-    command_router.register("move", Arc::new(MoveHandler { game_world: gw, session_manager: sm }));
+    command_router.register(
+        "move",
+        Arc::new(MoveHandler {
+            game_world: gw,
+            session_manager: sm,
+        }),
+    );
 
     let gw = game_world.clone();
     let sm = session_manager.clone();
-    command_router.register("attack", Arc::new(AttackHandler { game_world: gw, session_manager: sm }));
+    command_router.register(
+        "attack",
+        Arc::new(AttackHandler {
+            game_world: gw,
+            session_manager: sm,
+        }),
+    );
 
     let gw = game_world.clone();
     let sm = session_manager.clone();
-    command_router.register("inventory", Arc::new(InventoryHandler { game_world: gw, session_manager: sm }));
+    command_router.register(
+        "inventory",
+        Arc::new(InventoryHandler {
+            game_world: gw,
+            session_manager: sm,
+        }),
+    );
 
     let gw = game_world.clone();
     let sm = session_manager.clone();
-    command_router.register("create_character", Arc::new(CreateCharacterHandler { game_world: gw, session_manager: sm }));
+    command_router.register(
+        "create_character",
+        Arc::new(CreateCharacterHandler {
+            game_world: gw,
+            session_manager: sm,
+        }),
+    );
 
     tracing::info!("Server ready. Waiting for connections...");
 
@@ -137,10 +169,13 @@ async fn run_server(bind: &str, plugin_dir: &str) -> Result<()> {
 }
 
 async fn run_client(server_addr: &str) -> Result<()> {
-    tracing::info!("Starting The Protocol Runtime in CLIENT mode, connecting to {}", server_addr);
+    tracing::info!(
+        "Starting The Protocol Runtime in CLIENT mode, connecting to {}",
+        server_addr
+    );
 
-    use tokio::net::TcpStream;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
 
     let mut stream = TcpStream::connect(server_addr).await?;
     stream.set_nodelay(true)?;
@@ -165,7 +200,8 @@ async fn run_client(server_addr: &str) -> Result<()> {
     full_frame.put_slice(&frame);
 
     let mut buf = full_frame;
-    let ack = ProtocolCodec::decode_simple(&mut buf)?.ok_or_else(|| anyhow::anyhow!("No response"))?;
+    let ack =
+        ProtocolCodec::decode_simple(&mut buf)?.ok_or_else(|| anyhow::anyhow!("No response"))?;
 
     match ack.message_type {
         MessageType::HelloAck => {
@@ -240,9 +276,7 @@ async fn run_client(server_addr: &str) -> Result<()> {
                     "down" | "d" => protocol_protocol::Direction::Down,
                     _ => protocol_protocol::Direction::North,
                 };
-                let move_cmd = MoveCommand {
-                    direction: dir,
-                };
+                let move_cmd = MoveCommand { direction: dir };
                 let payload = rmp_serde::to_vec(&move_cmd)?;
                 let cmd = Command {
                     id: rand::random(),
@@ -318,7 +352,9 @@ async fn run_client(server_addr: &str) -> Result<()> {
                         MessageType::CommandResponse => {
                             let resp: CommandResponse = rmp_serde::from_slice(&response.payload)?;
                             if resp.success {
-                                if let Ok(look_resp) = rmp_serde::from_slice::<LookResponse>(&resp.payload) {
+                                if let Ok(look_resp) =
+                                    rmp_serde::from_slice::<LookResponse>(&resp.payload)
+                                {
                                     println!("\n=== {} ===", look_resp.room_name);
                                     println!("{}", look_resp.room_description);
                                     if !look_resp.exits.is_empty() {
@@ -336,12 +372,21 @@ async fn run_client(server_addr: &str) -> Result<()> {
                                             println!("  {} (HP: {}/{})", n.name, n.hp, n.max_hp);
                                         }
                                     }
-                                } else if let Ok(move_resp) = rmp_serde::from_slice::<MoveResponse>(&resp.payload) {
-                                    println!("\nYou move to {}.", move_resp.room_name.unwrap_or_default());
+                                } else if let Ok(move_resp) =
+                                    rmp_serde::from_slice::<MoveResponse>(&resp.payload)
+                                {
+                                    println!(
+                                        "\nYou move to {}.",
+                                        move_resp.room_name.unwrap_or_default()
+                                    );
                                     println!("{}", move_resp.room_description.unwrap_or_default());
-                                } else if let Ok(attack_resp) = rmp_serde::from_slice::<AttackResponse>(&resp.payload) {
+                                } else if let Ok(attack_resp) =
+                                    rmp_serde::from_slice::<AttackResponse>(&resp.payload)
+                                {
                                     println!("{}", attack_resp.message.unwrap_or_default());
-                                } else if let Ok(inv_resp) = rmp_serde::from_slice::<InventoryResponse>(&resp.payload) {
+                                } else if let Ok(inv_resp) =
+                                    rmp_serde::from_slice::<InventoryResponse>(&resp.payload)
+                                {
                                     println!("\n=== Inventory ===");
                                     if inv_resp.items.is_empty() {
                                         println!("  Empty");
@@ -356,7 +401,10 @@ async fn run_client(server_addr: &str) -> Result<()> {
                                     println!("{}", display);
                                 }
                             } else {
-                                println!("Error: {}", resp.error.unwrap_or_else(|| "Unknown error".to_string()));
+                                println!(
+                                    "Error: {}",
+                                    resp.error.unwrap_or_else(|| "Unknown error".to_string())
+                                );
                             }
                         }
                         MessageType::Error => {
@@ -445,8 +493,10 @@ fn dispatch_events(
     // Group commands by the room they affect (`None` = undetermined, falls
     // back to a full broadcast) so we send one batch per recipient set
     // instead of one message per command.
-    let mut by_room: std::collections::HashMap<Option<u32>, Vec<protocol_presentation::PresentationCommand>> =
-        std::collections::HashMap::new();
+    let mut by_room: std::collections::HashMap<
+        Option<u32>,
+        Vec<protocol_presentation::PresentationCommand>,
+    > = std::collections::HashMap::new();
     for command in commands {
         let room_id = affected_room(&command, game_world);
         by_room.entry(room_id).or_default().push(command);
@@ -533,7 +583,10 @@ fn dispatch_events(
 /// via `entity_room`. `ShowMessage`'s `target_entity_id` is optional and
 /// `PlayEffect`'s `entity_id` is optional too - both fall back to `None`
 /// (broadcast) when absent, same as when the entity can't be found at all.
-fn affected_room(command: &protocol_presentation::PresentationCommand, game_world: &GameWorld) -> Option<u32> {
+fn affected_room(
+    command: &protocol_presentation::PresentationCommand,
+    game_world: &GameWorld,
+) -> Option<u32> {
     use protocol_presentation::PresentationCommand::*;
     match command {
         SpawnEntity { room_id, .. } => Some(*room_id),
@@ -542,7 +595,9 @@ fn affected_room(command: &protocol_presentation::PresentationCommand, game_worl
         DespawnEntity { entity_id } => entity_room(*entity_id, game_world),
         UpdateProperty { entity_id, .. } => entity_room(*entity_id, game_world),
         PlayEffect { entity_id, .. } => entity_id.and_then(|id| entity_room(id, game_world)),
-        ShowMessage { target_entity_id, .. } => target_entity_id.and_then(|id| entity_room(id, game_world)),
+        ShowMessage {
+            target_entity_id, ..
+        } => target_entity_id.and_then(|id| entity_room(id, game_world)),
     }
 }
 
@@ -557,7 +612,10 @@ fn entity_room(entity_id: u64, game_world: &GameWorld) -> Option<u32> {
     if entity_id >= 1000 {
         game_world.get_character(entity_id).map(|c| c.room_id)
     } else {
-        game_world.get_world().get_npc(entity_id).map(|npc| npc.room_id)
+        game_world
+            .get_world()
+            .get_npc(entity_id)
+            .map(|npc| npc.room_id)
     }
 }
 
@@ -568,31 +626,47 @@ struct LookHandler {
 
 #[async_trait::async_trait]
 impl protocol_routing::CommandHandler for LookHandler {
-    async fn handle(&self, _command: Command, session_id: u64) -> Result<CommandResponse, protocol_routing::RoutingError> {
+    async fn handle(
+        &self,
+        _command: Command,
+        session_id: u64,
+    ) -> Result<CommandResponse, protocol_routing::RoutingError> {
         let character_id = resolve_character_id(&self.session_manager, session_id)?;
 
         let world = self.game_world.read().await;
-        let room_id = world.get_character(character_id)
-            .ok_or_else(|| protocol_routing::RoutingError::HandlerError("Character not found".to_string()))?
+        let room_id = world
+            .get_character(character_id)
+            .ok_or_else(|| {
+                protocol_routing::RoutingError::HandlerError("Character not found".to_string())
+            })?
             .room_id;
-        let room_info = world.look_room(room_id)
-            .ok_or_else(|| protocol_routing::RoutingError::HandlerError("Room not found".to_string()))?;
+        let room_info = world.look_room(room_id).ok_or_else(|| {
+            protocol_routing::RoutingError::HandlerError("Room not found".to_string())
+        })?;
 
         let response = LookResponse {
             room_name: room_info.name,
             room_description: room_info.description,
             exits: room_info.exits,
-            players: room_info.players.into_iter().map(|p| protocol_protocol::PlayerSummary {
-                id: p.id,
-                name: p.name,
-                level: p.level,
-            }).collect(),
-            npcs: room_info.npcs.into_iter().map(|n| protocol_protocol::NpcSummary {
-                id: n.id,
-                name: n.name,
-                hp: n.hp,
-                max_hp: n.max_hp,
-            }).collect(),
+            players: room_info
+                .players
+                .into_iter()
+                .map(|p| protocol_protocol::PlayerSummary {
+                    id: p.id,
+                    name: p.name,
+                    level: p.level,
+                })
+                .collect(),
+            npcs: room_info
+                .npcs
+                .into_iter()
+                .map(|n| protocol_protocol::NpcSummary {
+                    id: n.id,
+                    name: n.name,
+                    hp: n.hp,
+                    max_hp: n.max_hp,
+                })
+                .collect(),
         };
 
         let payload = rmp_serde::to_vec(&response)
@@ -615,7 +689,11 @@ struct MoveHandler {
 
 #[async_trait::async_trait]
 impl protocol_routing::CommandHandler for MoveHandler {
-    async fn handle(&self, command: Command, session_id: u64) -> Result<CommandResponse, protocol_routing::RoutingError> {
+    async fn handle(
+        &self,
+        command: Command,
+        session_id: u64,
+    ) -> Result<CommandResponse, protocol_routing::RoutingError> {
         let character_id = resolve_character_id(&self.session_manager, session_id)?;
 
         let move_cmd: MoveCommand = rmp_serde::from_slice(&command.payload)
@@ -686,7 +764,11 @@ struct AttackHandler {
 
 #[async_trait::async_trait]
 impl protocol_routing::CommandHandler for AttackHandler {
-    async fn handle(&self, command: Command, session_id: u64) -> Result<CommandResponse, protocol_routing::RoutingError> {
+    async fn handle(
+        &self,
+        command: Command,
+        session_id: u64,
+    ) -> Result<CommandResponse, protocol_routing::RoutingError> {
         let character_id = resolve_character_id(&self.session_manager, session_id)?;
         let target_name = String::from_utf8_lossy(&command.payload).to_string();
 
@@ -746,19 +828,30 @@ struct InventoryHandler {
 
 #[async_trait::async_trait]
 impl protocol_routing::CommandHandler for InventoryHandler {
-    async fn handle(&self, _command: Command, session_id: u64) -> Result<CommandResponse, protocol_routing::RoutingError> {
+    async fn handle(
+        &self,
+        _command: Command,
+        session_id: u64,
+    ) -> Result<CommandResponse, protocol_routing::RoutingError> {
         let character_id = resolve_character_id(&self.session_manager, session_id)?;
 
         let world = self.game_world.read().await;
-        let inventory = world.get_inventory(character_id).cloned().unwrap_or_else(|| Inventory::new());
+        let inventory = world
+            .get_inventory(character_id)
+            .cloned()
+            .unwrap_or_else(|| Inventory::new());
 
         let response = InventoryResponse {
-            items: inventory.items.into_iter().map(|i| protocol_protocol::InventoryItem {
-                item_id: i.item_id,
-                name: i.name,
-                quantity: i.quantity,
-                item_type: "item".to_string(),
-            }).collect(),
+            items: inventory
+                .items
+                .into_iter()
+                .map(|i| protocol_protocol::InventoryItem {
+                    item_id: i.item_id,
+                    name: i.name,
+                    quantity: i.quantity,
+                    item_type: "item".to_string(),
+                })
+                .collect(),
             gold: inventory.gold,
         };
 
@@ -782,7 +875,11 @@ struct CreateCharacterHandler {
 
 #[async_trait::async_trait]
 impl protocol_routing::CommandHandler for CreateCharacterHandler {
-    async fn handle(&self, command: Command, session_id: u64) -> Result<CommandResponse, protocol_routing::RoutingError> {
+    async fn handle(
+        &self,
+        command: Command,
+        session_id: u64,
+    ) -> Result<CommandResponse, protocol_routing::RoutingError> {
         let create_cmd: CreateCharacterCommand = rmp_serde::from_slice(&command.payload)
             .map_err(|e| protocol_routing::RoutingError::HandlerError(e.to_string()))?;
 

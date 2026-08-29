@@ -85,15 +85,10 @@ impl PluginEngine {
             let entry = entry.map_err(PluginError::Io)?;
             let manifest_path = entry.path().join("plugin.toml");
             if manifest_path.exists() {
-                let content =
-                    std::fs::read_to_string(&manifest_path).map_err(PluginError::Io)?;
+                let content = std::fs::read_to_string(&manifest_path).map_err(PluginError::Io)?;
                 let manifest: PluginManifest =
                     toml::from_str(&content).map_err(|e| PluginError::InitFailed(e.to_string()))?;
-                tracing::info!(
-                    "Discovered plugin: {} v{}",
-                    manifest.name,
-                    manifest.version
-                );
+                tracing::info!("Discovered plugin: {} v{}", manifest.name, manifest.version);
                 manifests.push(manifest);
             }
         }
@@ -133,10 +128,8 @@ impl PluginEngine {
         let module = Module::new(&self.engine, &wasm_bytes)
             .map_err(|e| PluginError::Compilation(e.to_string()))?;
 
-        self.compiled.insert(
-            name.to_string(),
-            CompiledModule { module, manifest },
-        );
+        self.compiled
+            .insert(name.to_string(), CompiledModule { module, manifest });
 
         tracing::info!("Compiled plugin: {}", name);
         Ok(())
@@ -330,11 +323,7 @@ impl PluginEngine {
         linker
     }
 
-    pub fn instantiate(
-        &mut self,
-        name: &str,
-        context: HostContext,
-    ) -> Result<(), PluginError> {
+    pub fn instantiate(&mut self, name: &str, context: HostContext) -> Result<(), PluginError> {
         if self.instances.contains_key(name) {
             return Err(PluginError::Lifecycle(format!(
                 "Plugin {} already instantiated",
@@ -353,7 +342,9 @@ impl PluginEngine {
         let host_state = HostState::new(context, self.shared_state.clone());
 
         let mut store = Store::new(&self.engine, host_state);
-        store.set_fuel(fuel_limit).map_err(|e| PluginError::Instantiation(e.to_string()))?;
+        store
+            .set_fuel(fuel_limit)
+            .map_err(|e| PluginError::Instantiation(e.to_string()))?;
 
         let linker = Self::build_linker(&self.engine);
 
@@ -528,18 +519,28 @@ impl PluginEngine {
         let cmd_bytes = command.as_bytes();
         let args_bytes = args.as_bytes();
 
-        let cmd_ptr = allocate_in_store(&mut instance.store, &instance.instance, cmd_bytes.len() as u32)?;
+        let cmd_ptr = allocate_in_store(
+            &mut instance.store,
+            &instance.instance,
+            cmd_bytes.len() as u32,
+        )?;
         write_to_store(&mut instance.store, &instance.instance, cmd_ptr, cmd_bytes)?;
 
-        let args_ptr = allocate_in_store(&mut instance.store, &instance.instance, args_bytes.len() as u32)?;
-        write_to_store(&mut instance.store, &instance.instance, args_ptr, args_bytes)?;
+        let args_ptr = allocate_in_store(
+            &mut instance.store,
+            &instance.instance,
+            args_bytes.len() as u32,
+        )?;
+        write_to_store(
+            &mut instance.store,
+            &instance.instance,
+            args_ptr,
+            args_bytes,
+        )?;
 
         let handle_fn = instance
             .instance
-            .get_typed_func::<(i32, i32, i32, i32, i64), i32>(
-                &mut instance.store,
-                "handle_command",
-            )
+            .get_typed_func::<(i32, i32, i32, i32, i64), i32>(&mut instance.store, "handle_command")
             .map_err(|e| PluginError::FunctionNotFound(e.to_string()))?;
 
         let result = handle_fn
@@ -555,8 +556,18 @@ impl PluginEngine {
             )
             .map_err(|e| PluginError::RuntimeError(e.to_string()))?;
 
-        free_in_store(&mut instance.store, &instance.instance, cmd_ptr, cmd_bytes.len() as u32)?;
-        free_in_store(&mut instance.store, &instance.instance, args_ptr, args_bytes.len() as u32)?;
+        free_in_store(
+            &mut instance.store,
+            &instance.instance,
+            cmd_ptr,
+            cmd_bytes.len() as u32,
+        )?;
+        free_in_store(
+            &mut instance.store,
+            &instance.instance,
+            args_ptr,
+            args_bytes.len() as u32,
+        )?;
 
         Ok(result)
     }
@@ -581,18 +592,25 @@ impl PluginEngine {
 
         let type_bytes = event_type.as_bytes();
 
-        let type_ptr = allocate_in_store(&mut instance.store, &instance.instance, type_bytes.len() as u32)?;
-        write_to_store(&mut instance.store, &instance.instance, type_ptr, type_bytes)?;
+        let type_ptr = allocate_in_store(
+            &mut instance.store,
+            &instance.instance,
+            type_bytes.len() as u32,
+        )?;
+        write_to_store(
+            &mut instance.store,
+            &instance.instance,
+            type_ptr,
+            type_bytes,
+        )?;
 
-        let data_ptr = allocate_in_store(&mut instance.store, &instance.instance, data.len() as u32)?;
+        let data_ptr =
+            allocate_in_store(&mut instance.store, &instance.instance, data.len() as u32)?;
         write_to_store(&mut instance.store, &instance.instance, data_ptr, data)?;
 
         let handle_fn = instance
             .instance
-            .get_typed_func::<(i32, i32, i32, i32), i32>(
-                &mut instance.store,
-                "handle_event",
-            )
+            .get_typed_func::<(i32, i32, i32, i32), i32>(&mut instance.store, "handle_event")
             .map_err(|e| PluginError::FunctionNotFound(e.to_string()))?;
 
         let result = handle_fn
@@ -607,8 +625,18 @@ impl PluginEngine {
             )
             .map_err(|e| PluginError::RuntimeError(e.to_string()))?;
 
-        free_in_store(&mut instance.store, &instance.instance, type_ptr, type_bytes.len() as u32)?;
-        free_in_store(&mut instance.store, &instance.instance, data_ptr, data.len() as u32)?;
+        free_in_store(
+            &mut instance.store,
+            &instance.instance,
+            type_ptr,
+            type_bytes.len() as u32,
+        )?;
+        free_in_store(
+            &mut instance.store,
+            &instance.instance,
+            data_ptr,
+            data.len() as u32,
+        )?;
 
         Ok(result)
     }
@@ -687,7 +715,11 @@ fn free_in_store(
         .and_then(|e| e.into_func());
 
     if let Some(free_fn) = free_fn {
-        let _ = free_fn.call(&mut *store, &[Val::I32(ptr as i32), Val::I32(size as i32)], &mut []);
+        let _ = free_fn.call(
+            &mut *store,
+            &[Val::I32(ptr as i32), Val::I32(size as i32)],
+            &mut [],
+        );
     }
 
     Ok(())

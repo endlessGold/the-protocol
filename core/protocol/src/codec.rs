@@ -1,9 +1,9 @@
 use bytes::{Buf, BufMut, BytesMut};
 use thiserror::Error;
 
-use crate::message::{Message, MessageType};
 #[cfg(test)]
 use crate::message::{Command, CommandResponse};
+use crate::message::{Message, MessageType};
 
 #[derive(Debug, Error)]
 pub enum CodecError {

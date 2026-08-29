@@ -17,7 +17,11 @@ pub enum RoutingError {
 
 #[async_trait]
 pub trait CommandHandler: Send + Sync {
-    async fn handle(&self, command: Command, session_id: u64) -> Result<CommandResponse, RoutingError>;
+    async fn handle(
+        &self,
+        command: Command,
+        session_id: u64,
+    ) -> Result<CommandResponse, RoutingError>;
 }
 
 pub struct CommandRouter {
@@ -41,7 +45,8 @@ impl CommandRouter {
         command: Command,
         session_id: u64,
     ) -> Result<CommandResponse, RoutingError> {
-        let handler = self.handlers
+        let handler = self
+            .handlers
             .get(&command.command_type)
             .ok_or_else(|| RoutingError::UnknownCommand(command.command_type.clone()))?;
 

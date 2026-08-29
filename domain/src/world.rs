@@ -152,14 +152,19 @@ impl World {
         forest_exits.insert(Direction::South, 1);
         forest_exits.insert(Direction::North, 5);
 
-        self.rooms.insert(2, Room {
-            id: 2,
-            name: "Forest Path".to_string(),
-            description: "A winding path through a dense forest. Birds chirp in the canopy above.".to_string(),
-            exits: forest_exits,
-            npc_ids: vec![2],
-            item_ids: vec![],
-        });
+        self.rooms.insert(
+            2,
+            Room {
+                id: 2,
+                name: "Forest Path".to_string(),
+                description:
+                    "A winding path through a dense forest. Birds chirp in the canopy above."
+                        .to_string(),
+                exits: forest_exits,
+                npc_ids: vec![2],
+                item_ids: vec![],
+            },
+        );
 
         // Blacksmith
         let mut smith_exits = HashMap::new();
@@ -178,14 +183,19 @@ impl World {
         let mut market_exits = HashMap::new();
         market_exits.insert(Direction::North, 1);
 
-        self.rooms.insert(4, Room {
-            id: 4,
-            name: "Market".to_string(),
-            description: "A lively market with colorful stalls. Merchants call out to passersby.".to_string(),
-            exits: market_exits,
-            npc_ids: vec![],
-            item_ids: vec![3, 4],
-        });
+        self.rooms.insert(
+            4,
+            Room {
+                id: 4,
+                name: "Market".to_string(),
+                description:
+                    "A lively market with colorful stalls. Merchants call out to passersby."
+                        .to_string(),
+                exits: market_exits,
+                npc_ids: vec![],
+                item_ids: vec![3, 4],
+            },
+        );
 
         // Goblin Cave
         let mut cave_exits = HashMap::new();
@@ -201,53 +211,66 @@ impl World {
         });
 
         // NPCs
-        self.npcs.insert(1, Npc {
-            id: 1,
-            name: "Town Guard".to_string(),
-            description: "A stern-looking guard standing at attention.".to_string(),
-            room_id: 1,
-            hp: 100,
-            max_hp: 100,
-            level: 5,
-            attack: 12,
-            defense: 10,
-        });
+        self.npcs.insert(
+            1,
+            Npc {
+                id: 1,
+                name: "Town Guard".to_string(),
+                description: "A stern-looking guard standing at attention.".to_string(),
+                room_id: 1,
+                hp: 100,
+                max_hp: 100,
+                level: 5,
+                attack: 12,
+                defense: 10,
+            },
+        );
 
-        self.npcs.insert(2, Npc {
-            id: 2,
-            name: "Forest Wolf".to_string(),
-            description: "A gray wolf with piercing yellow eyes.".to_string(),
-            room_id: 2,
-            hp: 50,
-            max_hp: 50,
-            level: 2,
-            attack: 8,
-            defense: 4,
-        });
+        self.npcs.insert(
+            2,
+            Npc {
+                id: 2,
+                name: "Forest Wolf".to_string(),
+                description: "A gray wolf with piercing yellow eyes.".to_string(),
+                room_id: 2,
+                hp: 50,
+                max_hp: 50,
+                level: 2,
+                attack: 8,
+                defense: 4,
+            },
+        );
 
-        self.npcs.insert(3, Npc {
-            id: 3,
-            name: "Blacksmith Garen".to_string(),
-            description: "A burly man with soot-stained arms, hammering a blade.".to_string(),
-            room_id: 3,
-            hp: 120,
-            max_hp: 120,
-            level: 4,
-            attack: 10,
-            defense: 8,
-        });
+        self.npcs.insert(
+            3,
+            Npc {
+                id: 3,
+                name: "Blacksmith Garen".to_string(),
+                description: "A burly man with soot-stained arms, hammering a blade.".to_string(),
+                room_id: 3,
+                hp: 120,
+                max_hp: 120,
+                level: 4,
+                attack: 10,
+                defense: 8,
+            },
+        );
 
-        self.npcs.insert(4, Npc {
-            id: 4,
-            name: "Goblin".to_string(),
-            description: "A small, green creature with sharp teeth and a rusty dagger.".to_string(),
-            room_id: 5,
-            hp: 30,
-            max_hp: 30,
-            level: 1,
-            attack: 5,
-            defense: 2,
-        });
+        self.npcs.insert(
+            4,
+            Npc {
+                id: 4,
+                name: "Goblin".to_string(),
+                description: "A small, green creature with sharp teeth and a rusty dagger."
+                    .to_string(),
+                room_id: 5,
+                hp: 30,
+                max_hp: 30,
+                level: 1,
+                attack: 5,
+                defense: 2,
+            },
+        );
     }
 
     pub fn get_room(&self, room_id: u32) -> Option<&Room> {
@@ -263,8 +286,9 @@ impl World {
     }
 
     pub fn find_npc_in_room(&self, room_id: u32, name: &str) -> Option<&Npc> {
-        self.npcs.values()
-            .find(|npc| npc.room_id == room_id && npc.name.to_lowercase().contains(&name.to_lowercase()))
+        self.npcs.values().find(|npc| {
+            npc.room_id == room_id && npc.name.to_lowercase().contains(&name.to_lowercase())
+        })
     }
 }
 
@@ -275,7 +299,6 @@ impl Default for World {
 }
 
 impl World {
-
     /// Insert an NPC and register it in its room.
     ///
     /// `Npc::room_id` and `Room::npc_ids` are two representations of the

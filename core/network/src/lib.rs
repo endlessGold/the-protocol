@@ -92,10 +92,8 @@ impl NetworkManager {
         session_manager: Arc<SessionManager>,
         command_router: Arc<CommandRouter>,
     ) -> Result<(), NetworkError> {
-        let session_id = session_manager.create_session(
-            addr,
-            protocol_session::TransportType::Tcp,
-        )?;
+        let session_id =
+            session_manager.create_session(addr, protocol_session::TransportType::Tcp)?;
 
         let (mut reader, mut writer) = socket.into_split();
 
@@ -112,8 +110,7 @@ impl NetworkManager {
         full_frame.put_slice(&frame);
 
         let mut buf = full_frame;
-        let _hello_msg = ProtocolCodec::decode_simple(&mut buf)?
-            .ok_or(NetworkError::Closed)?;
+        let _hello_msg = ProtocolCodec::decode_simple(&mut buf)?.ok_or(NetworkError::Closed)?;
 
         // Send HelloAck
         let hello_ack = Message::hello_ack(session_id, vec!["game".to_string()]);
@@ -129,7 +126,9 @@ impl NetworkManager {
 
         // Main read loop
         let mut incoming_rx = {
-            let session = session_manager.get(session_id).ok_or(NetworkError::Closed)?;
+            let session = session_manager
+                .get(session_id)
+                .ok_or(NetworkError::Closed)?;
             session.incoming_rx.clone()
         };
 

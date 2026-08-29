@@ -18,5 +18,10 @@ fn main() {
     let wasm_bytes = wat::parse_str(&wat_content).expect("Failed to parse WAT");
 
     std::fs::write(&output, &wasm_bytes).expect("Failed to write WASM file");
-    println!("Compiled {} -> {} ({} bytes)", input, output, wasm_bytes.len());
+    println!(
+        "Compiled {} -> {} ({} bytes)",
+        input,
+        output,
+        wasm_bytes.len()
+    );
 }

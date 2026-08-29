@@ -43,7 +43,11 @@ fn alloc_buffer(caller: &mut Caller<'_, HostState>, size: u32) -> Result<u32, Pl
 
     let mut results = [wasmtime::Val::I32(0)];
     alloc_fn
-        .call(&mut *caller, &[wasmtime::Val::I32(size as i32)], &mut results)
+        .call(
+            &mut *caller,
+            &[wasmtime::Val::I32(size as i32)],
+            &mut results,
+        )
         .map_err(|e| PluginError::RuntimeError(e.to_string()))?;
 
     match results[0] {
@@ -157,7 +161,12 @@ pub fn host_emit_event(
         id
     };
 
-    caller.data().events.entry(event_id).or_default().push(event);
+    caller
+        .data()
+        .events
+        .entry(event_id)
+        .or_default()
+        .push(event);
     Ok(0)
 }
 

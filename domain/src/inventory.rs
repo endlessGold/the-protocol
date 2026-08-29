@@ -54,7 +54,12 @@ impl Inventory {
         }
     }
 
-    pub fn add_item(&mut self, item_id: u32, name: &str, quantity: u32) -> Result<(), InventoryError> {
+    pub fn add_item(
+        &mut self,
+        item_id: u32,
+        name: &str,
+        quantity: u32,
+    ) -> Result<(), InventoryError> {
         if let Some(stack) = self.items.iter_mut().find(|s| s.item_id == item_id) {
             stack.quantity += quantity;
             return Ok(());
@@ -88,14 +93,16 @@ impl Inventory {
     }
 
     pub fn has_item(&self, item_id: u32, quantity: u32) -> bool {
-        self.items.iter()
+        self.items
+            .iter()
             .find(|s| s.item_id == item_id)
             .map(|s| s.quantity >= quantity)
             .unwrap_or(false)
     }
 
     pub fn item_count(&self, item_id: u32) -> u32 {
-        self.items.iter()
+        self.items
+            .iter()
             .find(|s| s.item_id == item_id)
             .map(|s| s.quantity)
             .unwrap_or(0)

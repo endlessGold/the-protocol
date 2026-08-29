@@ -80,7 +80,12 @@ impl SessionManager {
         self.sessions.insert(session_id, session);
         self.address_sessions.insert(addr, session_id);
 
-        tracing::info!("Session {} created from {} ({:?})", session_id, addr, transport);
+        tracing::info!(
+            "Session {} created from {} ({:?})",
+            session_id,
+            addr,
+            transport
+        );
         Ok(session_id)
     }
 

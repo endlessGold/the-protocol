@@ -431,10 +431,9 @@ fn command_to_dict(command: &PresentationCommand) -> (&'static str, VarDictionar
                 "display_name" => display_name.clone(),
             },
         ),
-        PresentationCommand::DespawnEntity { entity_id } => (
-            "DespawnEntity",
-            dict! { "entity_id" => *entity_id as i64 },
-        ),
+        PresentationCommand::DespawnEntity { entity_id } => {
+            ("DespawnEntity", dict! { "entity_id" => *entity_id as i64 })
+        }
         PresentationCommand::EnterRoom { entity_id, room_id } => (
             "EnterRoom",
             dict! {
