@@ -155,7 +155,7 @@ impl Default for ProtocolCodec {
 /// GDScript client needs the matching update.
 #[cfg(test)]
 mod wire_format_contract {
-    use crate::message::{ClientType, Event, Hello, Message, MessageType};
+    use crate::message::{ClientType, Event, Message, MessageType};
 
     #[test]
     fn hello_payload_is_a_positional_array_with_a_named_enum_variant() {
