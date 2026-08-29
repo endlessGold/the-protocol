@@ -158,7 +158,12 @@ mod tests {
 
         let events = combat.process_attack(&mut attacker, &mut target);
 
-        assert_eq!(events.len(), 1, "expected only AttackExecuted: {:?}", events);
+        assert_eq!(
+            events.len(),
+            1,
+            "expected only AttackExecuted: {:?}",
+            events
+        );
         match &events[0] {
             DomainEvent::AttackExecuted {
                 combat_id, damage, ..

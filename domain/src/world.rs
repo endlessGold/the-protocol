@@ -415,7 +415,11 @@ mod tests {
         if let Some(room_id) = expected_room {
             assert_eq!(listings, vec![room_id]);
         } else {
-            assert!(listings.is_empty(), "removed npc still listed in {:?}", listings);
+            assert!(
+                listings.is_empty(),
+                "removed npc still listed in {:?}",
+                listings
+            );
         }
     }
 
@@ -516,9 +520,15 @@ mod tests {
         let exits = world.exits_from(1);
         assert_eq!(exits.len(), world.get_room(1).unwrap().exits.len());
         for (direction, room_id) in exits {
-            assert_eq!(world.get_room(1).unwrap().exits.get(&direction), Some(&room_id));
+            assert_eq!(
+                world.get_room(1).unwrap().exits.get(&direction),
+                Some(&room_id)
+            );
         }
-        assert!(world.exits_from(9999).is_empty(), "unknown room has no exits");
+        assert!(
+            world.exits_from(9999).is_empty(),
+            "unknown room has no exits"
+        );
     }
 
     #[test]
