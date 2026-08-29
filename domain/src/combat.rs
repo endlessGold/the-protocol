@@ -110,3 +110,128 @@ impl Combat {
         events
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::character::{Character, CharacterClass};
+    use crate::world::Npc;
+
+    fn hero() -> Character {
+        let mut c = Character::new("Hero".to_string(), CharacterClass::Warrior);
+        c.id = 1000;
+        c
+    }
+
+    fn dummy(hp: u32, defense: u32) -> Npc {
+        Npc {
+            id: 2,
+            name: "Dummy".to_string(),
+            description: String::new(),
+            room_id: 1,
+            hp,
+            max_hp: hp,
+            level: 1,
+            attack: 5,
+            defense,
+        }
+    }
+
+    #[test]
+    fn damage_is_never_zero_even_against_heavy_armour() {
+        // raw = offense - defense*0.5, then +/-20% variance. A defender
+        // whose defense exceeds the attacker's offense must still take
+        // chip damage rather than 0 (or, worse, underflow).
+        let attacker = dummy(50, 0); // attack 5
+        let tank = dummy(50, 10_000);
+        for _ in 0..50 {
+            assert!(Combat::calculate_damage(&attacker, &tank) >= 1);
+        }
+    }
+
+    #[test]
+    fn a_survivable_hit_emits_only_attack_executed() {
+        let mut attacker = hero();
+        let mut target = dummy(10_000, 0); // can't die in one hit
+        let mut combat = Combat::new(attacker.id, target.id);
+        combat.id = 7;
+
+        let events = combat.process_attack(&mut attacker, &mut target);
+
+        assert_eq!(events.len(), 1, "expected only AttackExecuted: {:?}", events);
+        match &events[0] {
+            DomainEvent::AttackExecuted {
+                combat_id, damage, ..
+            } => {
+                assert_eq!(*combat_id, 7);
+                assert!(*damage >= 1);
+            }
+            other => panic!("expected AttackExecuted, got {:?}", other),
+        }
+        assert!(target.hp < target.max_hp, "target should have taken damage");
+        assert_eq!(combat.state, CombatState::InProgress);
+        assert_eq!(combat.log.len(), 1);
+    }
+
+    #[test]
+    fn a_killing_blow_ends_combat_and_awards_experience() {
+        let mut attacker = hero();
+        let mut target = dummy(1, 0); // dies to anything
+        let xp_before = attacker.experience;
+        let mut combat = Combat::new(attacker.id, target.id);
+
+        let events = combat.process_attack(&mut attacker, &mut target);
+
+        assert!(!target.is_alive());
+        assert!(
+            matches!(combat.state, CombatState::Finished { winner_id } if winner_id == attacker.id)
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, DomainEvent::CombatEnded { .. })),
+            "expected CombatEnded in {:?}",
+            events
+        );
+        // AttackExecuted must come before CombatEnded - a client replaying
+        // these in order should see the hit land, then the fight end.
+        assert!(matches!(events[0], DomainEvent::AttackExecuted { .. }));
+        assert!(matches!(
+            events.last(),
+            Some(DomainEvent::CombatEnded { .. })
+        ));
+        assert!(
+            attacker.experience > xp_before || attacker.level > 1,
+            "killing should award xp (or level up, consuming it)"
+        );
+    }
+
+    #[test]
+    fn turn_counter_advances_per_attack() {
+        let mut attacker = hero();
+        let mut target = dummy(10_000, 0);
+        let mut combat = Combat::new(attacker.id, target.id);
+        let start = combat.turn;
+
+        combat.process_attack(&mut attacker, &mut target);
+        combat.process_attack(&mut attacker, &mut target);
+
+        assert_eq!(combat.turn, start + 2);
+        assert_eq!(combat.log.len(), 2);
+    }
+
+    #[test]
+    fn an_npc_can_attack_a_character() {
+        // The whole point of Combatant: this direction has to work too, not
+        // just character -> npc.
+        let mut attacker = dummy(50, 0);
+        let mut target = hero();
+        let hp_before = target.hp;
+        let mut combat = Combat::new(attacker.id, target.id);
+
+        let events = combat.process_attack(&mut attacker, &mut target);
+
+        assert!(target.hp < hp_before);
+        assert!(matches!(events[0], DomainEvent::AttackExecuted { .. }));
+    }
+}

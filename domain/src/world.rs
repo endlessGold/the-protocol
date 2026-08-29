@@ -360,3 +360,200 @@ impl World {
             .unwrap_or_default()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_npc(id: u64, room_id: u32) -> Npc {
+        Npc {
+            id,
+            name: format!("NPC {}", id),
+            description: String::new(),
+            room_id,
+            hp: 20,
+            max_hp: 20,
+            level: 1,
+            attack: 5,
+            defense: 2,
+        }
+    }
+
+    /// `Npc.room_id` and `Room.npc_ids` are two representations of the same
+    /// fact, and `look_room()` reads the latter. If they ever disagree a
+    /// room either shows a ghost NPC or hides a present one - so every one
+    /// of these tests asserts BOTH sides.
+    fn assert_consistent(world: &World, npc_id: u64, expected_room: Option<u32>) {
+        match expected_room {
+            Some(room_id) => {
+                let npc = world.get_npc(npc_id).expect("npc should exist");
+                assert_eq!(npc.room_id, room_id, "npc.room_id");
+                assert!(
+                    world.get_room(room_id).unwrap().npc_ids.contains(&npc_id),
+                    "room {} should list npc {}",
+                    room_id,
+                    npc_id
+                );
+            }
+            None => {
+                assert!(world.get_npc(npc_id).is_none(), "npc should be gone");
+            }
+        }
+        // Whatever the expectation, the id must appear in at most one room.
+        let listings: Vec<u32> = world
+            .rooms
+            .values()
+            .filter(|r| r.npc_ids.contains(&npc_id))
+            .map(|r| r.id)
+            .collect();
+        assert!(
+            listings.len() <= 1,
+            "npc {} is listed in multiple rooms: {:?}",
+            npc_id,
+            listings
+        );
+        if let Some(room_id) = expected_room {
+            assert_eq!(listings, vec![room_id]);
+        } else {
+            assert!(listings.is_empty(), "removed npc still listed in {:?}", listings);
+        }
+    }
+
+    #[test]
+    fn seeded_world_is_internally_consistent() {
+        // The hardcoded NPCs in initialize() must satisfy the same
+        // invariant as dynamically added ones.
+        let world = World::new();
+        for id in world.npcs.keys() {
+            assert_consistent(&world, *id, Some(world.get_npc(*id).unwrap().room_id));
+        }
+    }
+
+    #[test]
+    fn add_npc_registers_it_in_its_room() {
+        let mut world = World::new();
+        world.add_npc(make_npc(500, 2));
+        assert_consistent(&world, 500, Some(2));
+    }
+
+    #[test]
+    fn add_npc_is_idempotent_for_the_same_id() {
+        let mut world = World::new();
+        world.add_npc(make_npc(500, 2));
+        world.add_npc(make_npc(500, 2));
+        // Not listed twice - assert_consistent's uniqueness check would
+        // pass either way, so check the count directly.
+        let count = world
+            .get_room(2)
+            .unwrap()
+            .npc_ids
+            .iter()
+            .filter(|id| **id == 500)
+            .count();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn move_npc_updates_both_rooms_and_the_npc() {
+        let mut world = World::new();
+        world.add_npc(make_npc(500, 1));
+
+        let from = world.move_npc(500, 2).expect("move should succeed");
+
+        assert_eq!(from, 1);
+        assert_consistent(&world, 500, Some(2));
+        assert!(
+            !world.get_room(1).unwrap().npc_ids.contains(&500),
+            "old room must drop the npc"
+        );
+    }
+
+    #[test]
+    fn move_npc_to_an_unknown_room_changes_nothing() {
+        let mut world = World::new();
+        world.add_npc(make_npc(500, 1));
+
+        assert!(world.move_npc(500, 9999).is_none());
+        assert_consistent(&world, 500, Some(1));
+    }
+
+    #[test]
+    fn move_npc_that_does_not_exist_is_none() {
+        let mut world = World::new();
+        assert!(world.move_npc(12345, 2).is_none());
+    }
+
+    #[test]
+    fn move_npc_to_its_current_room_is_a_noop() {
+        let mut world = World::new();
+        world.add_npc(make_npc(500, 1));
+        assert_eq!(world.move_npc(500, 1), Some(1));
+        assert_consistent(&world, 500, Some(1));
+    }
+
+    #[test]
+    fn remove_npc_clears_it_from_its_room() {
+        let mut world = World::new();
+        world.add_npc(make_npc(500, 3));
+
+        assert_eq!(world.remove_npc(500), Some(3));
+        assert_consistent(&world, 500, None);
+        assert!(world.remove_npc(500).is_none(), "second remove is None");
+    }
+
+    #[test]
+    fn removing_a_seeded_npc_also_clears_its_room() {
+        // The Goblin (id 4) lives in room 5 per initialize().
+        let mut world = World::new();
+        let room = world.get_npc(4).unwrap().room_id;
+        assert_eq!(world.remove_npc(4), Some(room));
+        assert_consistent(&world, 4, None);
+    }
+
+    #[test]
+    fn exits_from_matches_the_rooms_exit_table() {
+        let world = World::new();
+        let exits = world.exits_from(1);
+        assert_eq!(exits.len(), world.get_room(1).unwrap().exits.len());
+        for (direction, room_id) in exits {
+            assert_eq!(world.get_room(1).unwrap().exits.get(&direction), Some(&room_id));
+        }
+        assert!(world.exits_from(9999).is_empty(), "unknown room has no exits");
+    }
+
+    #[test]
+    fn find_npc_in_room_is_case_insensitive_and_room_scoped() {
+        let world = World::new();
+        // Forest Wolf is in room 2.
+        assert!(world.find_npc_in_room(2, "wolf").is_some());
+        assert!(world.find_npc_in_room(2, "WOLF").is_some());
+        assert!(
+            world.find_npc_in_room(1, "wolf").is_none(),
+            "must not find an npc from another room"
+        );
+    }
+
+    #[test]
+    fn direction_round_trips_and_opposites_pair_up() {
+        for (text, expected) in [
+            ("north", Direction::North),
+            ("N", Direction::North),
+            ("down", Direction::Down),
+        ] {
+            assert_eq!(Direction::from_str(text), Some(expected));
+        }
+        assert_eq!(Direction::from_str("sideways"), None);
+
+        for d in [
+            Direction::North,
+            Direction::South,
+            Direction::East,
+            Direction::West,
+            Direction::Up,
+            Direction::Down,
+        ] {
+            assert_eq!(d.opposite().opposite(), d);
+            assert_ne!(d.opposite(), d);
+        }
+    }
+}

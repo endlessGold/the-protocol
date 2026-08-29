@@ -443,3 +443,285 @@ pub struct NpcSpawnSpec {
     pub attack: u32,
     pub defense: u32,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec(name: &str, room_id: u32) -> NpcSpawnSpec {
+        NpcSpawnSpec {
+            name: name.to_string(),
+            description: "spawned in a test".to_string(),
+            room_id,
+            level: 2,
+            hp: 30,
+            attack: 6,
+            defense: 2,
+        }
+    }
+
+    fn new_hero(world: &mut GameWorld) -> u64 {
+        let character = world
+            .create_character("Hero".to_string(), "warrior")
+            .unwrap();
+        let id = character.id;
+        world.add_character(character);
+        world.drain_events(); // discard CharacterCreated
+        id
+    }
+
+    #[test]
+    fn create_character_emits_character_created() {
+        let mut world = GameWorld::new();
+        let character = world
+            .create_character("Hero".to_string(), "warrior")
+            .unwrap();
+
+        let events = world.drain_events();
+        assert_eq!(events.len(), 1, "got {:?}", events);
+        match &events[0] {
+            DomainEvent::CharacterCreated { character_id, name } => {
+                assert_eq!(*character_id, character.id);
+                assert_eq!(name, "Hero");
+            }
+            other => panic!("expected CharacterCreated, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn drain_events_empties_the_queue() {
+        let mut world = GameWorld::new();
+        world
+            .create_character("Hero".to_string(), "warrior")
+            .unwrap();
+        assert!(!world.drain_events().is_empty());
+        assert!(
+            world.drain_events().is_empty(),
+            "a second drain must return nothing"
+        );
+    }
+
+    #[test]
+    fn duplicate_character_names_are_rejected() {
+        let mut world = GameWorld::new();
+        let first = world
+            .create_character("Hero".to_string(), "warrior")
+            .unwrap();
+        world.add_character(first);
+        assert!(matches!(
+            world.create_character("Hero".to_string(), "warrior"),
+            Err(ApplicationError::CharacterNameTaken(_))
+        ));
+    }
+
+    #[test]
+    fn unknown_class_is_rejected() {
+        let mut world = GameWorld::new();
+        assert!(world
+            .create_character("Hero".to_string(), "wizardish")
+            .is_err());
+    }
+
+    /// Characters and runtime-spawned NPCs draw from ONE id space, because
+    /// the presentation layer addresses both as `entity_id`. A collision
+    /// means two different things answer to the same id.
+    #[test]
+    fn characters_and_npcs_never_share_an_id() {
+        let mut world = GameWorld::new();
+        let mut seen: Vec<u64> = world.get_world().npcs.keys().copied().collect();
+
+        for i in 0..5 {
+            let c = world
+                .create_character(format!("Hero{}", i), "warrior")
+                .unwrap();
+            seen.push(c.id);
+            world.add_character(c);
+
+            let npc_id = world.spawn_npc(spec(&format!("Mob{}", i), 1)).unwrap();
+            seen.push(npc_id);
+        }
+
+        let before = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(before, seen.len(), "duplicate entity id allocated");
+    }
+
+    #[test]
+    fn runtime_ids_stay_clear_of_the_seeded_npc_range() {
+        let mut world = GameWorld::new();
+        let seeded_max = world.get_world().npcs.keys().copied().max().unwrap_or(0);
+
+        let npc_id = world.spawn_npc(spec("Wisp", 1)).unwrap();
+        assert!(
+            npc_id > seeded_max,
+            "spawned npc id {} collides with seeded range (max {})",
+            npc_id,
+            seeded_max
+        );
+    }
+
+    #[test]
+    fn spawn_npc_emits_npc_spawned_and_is_visible_in_the_room() {
+        let mut world = GameWorld::new();
+        let npc_id = world.spawn_npc(spec("Wisp", 3)).unwrap();
+
+        let events = world.drain_events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                DomainEvent::NpcSpawned { npc_id: id, room_id, .. }
+                    if *id == npc_id && *room_id == 3
+            )),
+            "got {:?}",
+            events
+        );
+
+        let room = world.look_room(3).expect("room 3 exists");
+        assert!(room.npcs.iter().any(|n| n.id == npc_id));
+    }
+
+    #[test]
+    fn spawn_npc_into_an_unknown_room_fails() {
+        let mut world = GameWorld::new();
+        assert!(world.spawn_npc(spec("Nowhere", 9999)).is_err());
+        assert!(
+            world.drain_events().is_empty(),
+            "a failed spawn must not emit events"
+        );
+    }
+
+    #[test]
+    fn move_npc_emits_npc_moved_with_both_rooms() {
+        let mut world = GameWorld::new();
+        let npc_id = world.spawn_npc(spec("Wisp", 1)).unwrap();
+        world.drain_events();
+
+        // Room 1 has a north exit to room 2 per World::initialize().
+        let to = world.move_npc(npc_id, Direction::North).unwrap();
+        assert_eq!(to, 2);
+
+        let events = world.drain_events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                DomainEvent::NpcMoved { from_room_id, to_room_id, .. }
+                    if *from_room_id == 1 && *to_room_id == 2
+            )),
+            "got {:?}",
+            events
+        );
+        assert!(world
+            .look_room(2)
+            .unwrap()
+            .npcs
+            .iter()
+            .any(|n| n.id == npc_id));
+        assert!(!world
+            .look_room(1)
+            .unwrap()
+            .npcs
+            .iter()
+            .any(|n| n.id == npc_id));
+    }
+
+    #[test]
+    fn move_npc_through_a_missing_exit_fails_without_events() {
+        let mut world = GameWorld::new();
+        // Room 3 (Blacksmith) only has a west exit.
+        let npc_id = world.spawn_npc(spec("Wisp", 3)).unwrap();
+        world.drain_events();
+
+        assert!(world.move_npc(npc_id, Direction::North).is_err());
+        assert!(world.drain_events().is_empty());
+    }
+
+    #[test]
+    fn despawn_npc_emits_and_removes() {
+        let mut world = GameWorld::new();
+        let npc_id = world.spawn_npc(spec("Wisp", 1)).unwrap();
+        world.drain_events();
+
+        world.despawn_npc(npc_id).unwrap();
+
+        let events = world.drain_events();
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, DomainEvent::NpcDespawned { npc_id: id, .. } if *id == npc_id)));
+        assert!(!world
+            .look_room(1)
+            .unwrap()
+            .npcs
+            .iter()
+            .any(|n| n.id == npc_id));
+        assert!(world.despawn_npc(npc_id).is_err(), "second despawn errors");
+    }
+
+    #[test]
+    fn move_character_emits_leave_then_enter() {
+        let mut world = GameWorld::new();
+        let hero = new_hero(&mut world);
+
+        let result = world.move_character(hero, Direction::North).unwrap();
+        assert_eq!(result.from_room_id, 1);
+        assert_eq!(result.to_room_id, 2);
+
+        let events = world.drain_events();
+        // Order matters: a client applying these in sequence should see the
+        // player leave before arriving.
+        let left = events
+            .iter()
+            .position(|e| matches!(e, DomainEvent::PlayerLeftRoom { .. }));
+        let entered = events
+            .iter()
+            .position(|e| matches!(e, DomainEvent::PlayerEnteredRoom { .. }));
+        assert!(left.is_some() && entered.is_some(), "got {:?}", events);
+        assert!(left < entered, "LeaveRoom should precede EnterRoom");
+    }
+
+    #[test]
+    fn move_character_through_a_missing_exit_fails() {
+        let mut world = GameWorld::new();
+        let hero = new_hero(&mut world);
+        // Room 1 has no west exit.
+        assert!(world.move_character(hero, Direction::West).is_err());
+        assert!(world.drain_events().is_empty());
+    }
+
+    #[test]
+    fn start_combat_hits_a_real_npc_and_emits_attack_executed() {
+        let mut world = GameWorld::new();
+        let hero = new_hero(&mut world);
+        // Town Guard (id 1) is in room 1, where new characters start.
+        let info = world.start_combat(hero, "guard").expect("guard is here");
+
+        assert!(info.damage >= 1);
+        assert!(info.target_hp < info.target_max_hp);
+
+        let events = world.drain_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, DomainEvent::AttackExecuted { .. })),
+            "got {:?}",
+            events
+        );
+    }
+
+    #[test]
+    fn attacking_something_not_in_the_room_fails() {
+        let mut world = GameWorld::new();
+        let hero = new_hero(&mut world);
+        // The Goblin is in room 5, not room 1.
+        assert!(world.start_combat(hero, "goblin").is_err());
+        assert!(world.start_combat(hero, "nothing at all").is_err());
+    }
+
+    #[test]
+    fn get_inventory_returns_the_characters_own() {
+        let mut world = GameWorld::new();
+        let hero = new_hero(&mut world);
+        assert!(world.get_inventory(hero).is_some());
+        assert!(world.get_inventory(999_999).is_none());
+    }
+}
