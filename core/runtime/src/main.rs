@@ -467,7 +467,7 @@ fn dispatch_events(
         })
         .collect();
 
-    tracing::info!(
+    tracing::debug!(
         "dispatch_events: {} command(s) in {} room group(s); sessions: {:?}",
         by_room.values().map(|v| v.len()).sum::<usize>(),
         by_room.len(),
@@ -516,7 +516,7 @@ fn dispatch_events(
                         }
                     }
                 }
-                tracing::info!(
+                tracing::debug!(
                     "presentation_batch: {} command(s) for room {} -> {} session(s)",
                     batch_len,
                     room_id,
