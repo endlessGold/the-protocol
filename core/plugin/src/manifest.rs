@@ -69,12 +69,11 @@ pub const RUNTIME_API_VERSION: &str = "0.1.0";
 /// - same MAJOR, plugin MINOR > runtime MINOR -> compatible, but warn (the
 ///   plugin may call host functions this runtime doesn't implement yet)
 ///
-/// This was designed (see the doc above) but never actually called anywhere
-/// - `PluginEngine::compile()` loaded a manifest's `api_version` field and
-/// then ignored it, so an incompatible plugin would load silently and only
-/// fail later, opaquely, the first time it called a host function that
-/// doesn't exist. Wired into `compile()` so incompatible plugins are
-/// rejected up front with a clear error instead.
+/// The check is called from `PluginEngine::compile()`. It previously
+/// existed only as a design note while `compile()` read `api_version` and
+/// ignored it, which meant an incompatible plugin loaded silently and only
+/// failed later, opaquely, the first time it called a host function that
+/// doesn't exist.
 ///
 /// Versions are parsed leniently (`MAJOR.MINOR[.PATCH...]`); a missing or
 /// non-numeric segment is treated as `0` rather than rejected outright, since

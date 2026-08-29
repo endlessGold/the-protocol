@@ -14,7 +14,13 @@ struct CompiledModule {
 
 struct LoadedPluginInstance {
     store: Store<HostState>,
-    instance: Instance,
+    /// Kept for the permission/resource enforcement that isn't wired yet:
+    /// manifests declare `[permissions]` and `memory_limit`, and nothing
+    /// currently consults either (see CapabilityManager, which is
+    /// constructed and never used). Remove this if that plan is abandoned
+    /// rather than leaving it as decoration.
+    #[allow(dead_code)]
+    manifest: PluginManifest,
     manifest: PluginManifest,
     state: PluginState,
 }
@@ -472,29 +478,35 @@ impl PluginEngine {
 
     pub fn unload(&mut self, name: &str) -> Result<(), PluginError> {
         if let Some(mut instance) = self.instances.remove(name) {
+            // Best-effort teardown: the plugin is being removed either way,
+            // so a plugin that doesn't export these hooks, or that traps
+            // inside them, must not block unloading.
             if instance.state == PluginState::Enabled {
-                let _ = {
-                    let disable_fn = instance
-                        .instance
-                        .get_typed_func::<(), i32>(&mut instance.store, "plugin_disable");
-                    if let Ok(f) = disable_fn {
-                        let _ = f.call(&mut instance.store, ());
-                    }
-                };
+                Self::call_teardown_hook(&mut instance, "plugin_disable");
             }
-
-            let _ = {
-                let unload_fn = instance
-                    .instance
-                    .get_typed_func::<(), i32>(&mut instance.store, "plugin_unload");
-                if let Ok(f) = unload_fn {
-                    let _ = f.call(&mut instance.store, ());
-                }
-            };
+            Self::call_teardown_hook(&mut instance, "plugin_unload");
 
             tracing::info!("Unloaded plugin: {}", name);
         }
         Ok(())
+    }
+
+    /// Call an optional no-arg lifecycle export, ignoring both "not
+    /// exported" and "trapped" - see `unload`.
+    fn call_teardown_hook(instance: &mut LoadedPluginInstance, hook: &str) {
+        match instance
+            .instance
+            .get_typed_func::<(), i32>(&mut instance.store, hook)
+        {
+            Ok(f) => {
+                if let Err(e) = f.call(&mut instance.store, ()) {
+                    tracing::debug!("Plugin hook {} trapped during unload: {}", hook, e);
+                }
+            }
+            Err(_) => {
+                tracing::debug!("Plugin does not export {}, skipping", hook);
+            }
+        }
     }
 
     pub fn handle_command(
