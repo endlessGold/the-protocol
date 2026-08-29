@@ -216,8 +216,68 @@ impl CapabilityManager {
         }
     }
 
-    pub fn has_runtime_capability(&self, _cap: &str) -> bool {
-        // Simplified check
-        true
+    /// Whether this runtime provides `cap`, one of the field names on
+    /// `RuntimeCapabilities` (e.g. "tcp_listener", "plugin_runtime").
+    ///
+    /// Returns false for an unknown name rather than defaulting to true:
+    /// a typo'd capability should read as absent, not as universally
+    /// granted. This previously ignored its argument and returned true
+    /// unconditionally, which made every capability check meaningless.
+    pub fn has_runtime_capability(&self, cap: &str) -> bool {
+        let caps = &self.runtime_capabilities;
+        match cap {
+            "tcp_listener" => caps.tcp_listener,
+            "udp_listener" => caps.udp_listener,
+            "tcp_client" => caps.tcp_client,
+            "udp_client" => caps.udp_client,
+            "http_server" => caps.http_server,
+            "http_client" => caps.http_client,
+            "websocket_server" => caps.websocket_server,
+            "websocket_client" => caps.websocket_client,
+            "plugin_runtime" => caps.plugin_runtime,
+            "session_manager" => caps.session_manager,
+            "scheduler" => caps.scheduler,
+            "event_bus" => caps.event_bus,
+            "database" => caps.database,
+            "cache" => caps.cache,
+            "metrics" => caps.metrics,
+            unknown => {
+                tracing::warn!("Unknown runtime capability queried: {}", unknown);
+                false
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_capability_reflects_the_profile() {
+        let server = CapabilityManager::new(RuntimeCapabilities::server());
+        assert!(server.has_runtime_capability("tcp_listener"));
+        assert!(server.has_runtime_capability("plugin_runtime"));
+    }
+
+    #[test]
+    fn unknown_capability_is_denied_not_granted() {
+        // The old stub returned true for everything, so a typo silently
+        // granted a capability. Absent must mean absent.
+        let mgr = CapabilityManager::new(RuntimeCapabilities::server());
+        assert!(!mgr.has_runtime_capability("tcp_listner"));
+        assert!(!mgr.has_runtime_capability(""));
+    }
+
+    #[test]
+    fn profiles_actually_differ() {
+        let server = CapabilityManager::new(RuntimeCapabilities::server());
+        let client = CapabilityManager::new(RuntimeCapabilities::client());
+        // A client isn't a listener; if these ever come back equal the
+        // profiles have collapsed into each other.
+        assert_ne!(
+            server.has_runtime_capability("tcp_listener"),
+            client.has_runtime_capability("tcp_listener")
+        );
     }
 }
