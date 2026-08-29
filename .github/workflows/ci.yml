@@ -182,6 +182,11 @@ jobs:
 
       - name: Network test (Godot client against a live server)
         run: |
+          # NOTE: `set +e` is deliberate and load-bearing. GitHub runs steps
+          # with `bash -e`, so the first failing command aborts the step -
+          # which meant a failing test killed this script before it could
+          # print server.log, hiding the server-side half of every failure.
+          set +e
           set -uo pipefail
           # This is the only test that exercises core_client.gd's
           # hand-rolled MessagePack against a real server. The Rust-side
