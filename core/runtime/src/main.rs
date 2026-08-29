@@ -778,22 +778,23 @@ impl protocol_routing::CommandHandler for CreateCharacterHandler {
                 world.add_character(character);
 
                 let events = world.drain_events();
-                // See MoveHandler above: look up rooms while still holding
-                // the write guard, then drop. Note this runs before
-                // set_player below, so the just-created character's own
-                // session isn't bound to it yet and won't be counted as
-                // "in room 1" for this dispatch - same ordering as before,
-                // just now room-scoped; the client already learns its own
-                // character_id from the CreateCharacterResponse below.
-                dispatch_events(events, &self.session_manager, &world);
-                drop(world);
 
-                // Bind this session to the character it just created, so
-                // subsequent look/move/attack/inventory commands from this
-                // session know which character to act on.
+                // Bind the session to its new character BEFORE dispatching.
+                // Order matters now that dispatch is room-scoped: it
+                // resolves each session's room via
+                // session -> player_id -> Character.room_id, so an unbound
+                // session has no room and matches nothing. Dispatching
+                // first meant the player who just created a character was
+                // the one client that never saw their own SpawnEntity.
+                // (Found by the Godot network test, not by reasoning.)
                 self.session_manager
                     .set_player(session_id, character_id)
                     .map_err(|e| protocol_routing::RoutingError::HandlerError(e.to_string()))?;
+
+                // Still holding the write guard (it derefs to &GameWorld)
+                // so the room lookups see current state; drop after.
+                dispatch_events(events, &self.session_manager, &world);
+                drop(world);
 
                 let response = CreateCharacterResponse {
                     success: true,

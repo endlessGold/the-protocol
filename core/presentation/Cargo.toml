@@ -7,3 +7,7 @@ edition = "2021"
 serde.workspace = true
 
 protocol-domain = { path = "../../domain" }
+
+[dev-dependencies]
+# Only for the tests that pin the exact JSON shape the Godot client parses.
+serde_json.workspace = true

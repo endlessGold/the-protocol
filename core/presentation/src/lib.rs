@@ -78,7 +78,17 @@ pub enum EntityKind {
 /// calls `PresentationSink::send` directly) or over the wire, wrapped in a
 /// `protocol_protocol::Event` (see docs/11-presentation §7) for a
 /// networked multiplayer client.
+///
+/// `#[serde(tag = "type", content = "data")]` is load-bearing, not
+/// cosmetic: it produces `{"type": "SpawnEntity", "data": {...}}`, which is
+/// exactly the shape `PresentationBridge.apply()` on the Godot side reads.
+/// Serde's *default* for enums is externally tagged - `{"SpawnEntity":
+/// {...}}` - which the GDScript silently treats as a command named "" and
+/// discards. That mismatch shipped once and was only caught by running the
+/// client against a real server; `json_shape_matches_the_godot_bridge` in
+/// the tests below now pins it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
 pub enum PresentationCommand {
     SpawnEntity {
         entity_id: u64,
@@ -287,6 +297,83 @@ mod tests {
     fn combat_started_has_no_mapping_yet() {
         let event = DomainEvent::CombatStarted { combat_id: 1, attacker_id: 1, target_id: 2 };
         assert_eq!(translate_event(&event), vec![]);
+    }
+
+    /// Pins the JSON shape `PresentationBridge.apply_batch()` parses in
+    /// godot-client. This is a cross-language contract that no Rust caller
+    /// would ever notice breaking - the enum still round-trips through
+    /// serde perfectly well in the wrong shape, it just silently stops
+    /// meaning anything to the client. Which is exactly what happened.
+    #[test]
+    fn json_shape_matches_the_godot_bridge() {
+        let commands = vec![PresentationCommand::SpawnEntity {
+            entity_id: 1000,
+            kind: EntityKind::Player,
+            room_id: 1,
+            display_name: "Aldric".to_string(),
+        }];
+        let json = serde_json::to_string(&commands).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        let entry = &parsed[0];
+        assert_eq!(
+            entry["type"], "SpawnEntity",
+            "each entry needs a top-level \"type\" - the GDScript reads \
+             command.get(\"type\"). Got: {}",
+            json
+        );
+        assert_eq!(entry["data"]["entity_id"], 1000);
+        assert_eq!(entry["data"]["display_name"], "Aldric");
+        // EntityKind must be a plain string, not {"Player": null} etc -
+        // the bridge compares it directly.
+        assert_eq!(entry["data"]["kind"], "Player");
+    }
+
+    #[test]
+    fn every_command_variant_serializes_with_a_type_tag() {
+        // Guards against a future variant being added in a way that skips
+        // the tag (e.g. a newtype or unit variant, which serde tags
+        // differently).
+        let all = vec![
+            PresentationCommand::SpawnEntity {
+                entity_id: 1,
+                kind: EntityKind::Npc,
+                room_id: 1,
+                display_name: "x".into(),
+            },
+            PresentationCommand::DespawnEntity { entity_id: 1 },
+            PresentationCommand::EnterRoom { entity_id: 1, room_id: 2 },
+            PresentationCommand::LeaveRoom { entity_id: 1, room_id: 2 },
+            PresentationCommand::UpdateProperty {
+                entity_id: 1,
+                key: "hp".into(),
+                value: PropertyValue::Int(5),
+            },
+            PresentationCommand::PlayEffect {
+                name: "hit".into(),
+                entity_id: Some(1),
+                params: HashMap::new(),
+            },
+            PresentationCommand::ShowMessage {
+                text: "hi".into(),
+                target_entity_id: None,
+            },
+        ];
+
+        for command in &all {
+            let value: serde_json::Value =
+                serde_json::from_str(&serde_json::to_string(command).unwrap()).unwrap();
+            assert!(
+                value.get("type").and_then(|t| t.as_str()).is_some(),
+                "variant serialized without a string \"type\" tag: {:?}",
+                command
+            );
+            assert!(
+                value.get("data").is_some(),
+                "variant serialized without \"data\": {:?}",
+                command
+            );
+        }
     }
 
     #[test]
